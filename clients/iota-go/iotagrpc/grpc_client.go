@@ -1,0 +1,629 @@
+// Copyright 2020 IOTA Stiftung
+// SPDX-License-Identifier: Apache-2.0
+
+// Package iotagrpc provides a gRPC client that replaces the indexer-backed
+// iotax_* JSON-RPC calls (getCoins, getDynamicFields, etc.) with the
+// corresponding gRPC StateService and LedgerService RPCs.
+package iotagrpc
+
+import (
+	"context"
+	"encoding/binary"
+	"fmt"
+	"time"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/keepalive"
+
+	ledger_service "github.com/iotaledger/wasp/clients/iota-go/iotagrpc/iota/grpc/v1/ledger_service"
+	state_service "github.com/iotaledger/wasp/clients/iota-go/iotagrpc/iota/grpc/v1/state_service"
+	types_pb "github.com/iotaledger/wasp/clients/iota-go/iotagrpc/iota/grpc/v1/types"
+	"github.com/iotaledger/wasp/clients/iota-go/iotago"
+	"github.com/iotaledger/wasp/clients/iota-go/iotajsonrpc"
+)
+
+// Client wraps gRPC LedgerService + StateService and exposes Go-friendly
+// query methods that are drop-in replacements for the indexer-backed
+// iotax_* JSON-RPC calls.
+type Client struct {
+	conn    *grpc.ClientConn
+	ledger  ledger_service.LedgerServiceClient
+	state   state_service.StateServiceClient
+	address string
+}
+
+// NewClient dials the given gRPC address (without grpc:// prefix) and
+// returns a ready-to-use Client.
+func NewClient(address string, opts ...grpc.DialOption) (*Client, error) {
+	defaults := []grpc.DialOption{
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time:                30 * time.Second,
+			Timeout:             10 * time.Second,
+			PermitWithoutStream: true,
+		}),
+	}
+	conn, err := grpc.NewClient(address, append(defaults, opts...)...)
+	if err != nil {
+		return nil, fmt.Errorf("iotagrpc.NewClient: dial %s: %w", address, err)
+	}
+	return &Client{
+		conn:    conn,
+		ledger:  ledger_service.NewLedgerServiceClient(conn),
+		state:   state_service.NewStateServiceClient(conn),
+		address: address,
+	}, nil
+}
+
+func (c *Client) Close() error {
+	return c.conn.Close()
+}
+
+// ── Coin queries ──────────────────────────────────────────────────────────────
+
+// GetCoins returns up to limit coins of coinType owned by owner, starting after
+// cursor (nil = first page). Replaces iotax_getCoins.
+func (c *Client) GetCoins(
+	ctx context.Context,
+	owner *iotago.Address,
+	coinType string,
+	cursor []byte,
+	limit uint32,
+) (*iotajsonrpc.CoinPage, error) {
+	objectType := fmt.Sprintf("0x2::coin::Coin<%s>", coinType)
+	return c.listCoins(ctx, owner, objectType, coinType, cursor, limit)
+}
+
+// GetAllCoins returns all coin objects of any type owned by owner (paginated).
+// Replaces iotax_getAllCoins.
+func (c *Client) GetAllCoins(
+	ctx context.Context,
+	owner *iotago.Address,
+	cursor []byte,
+	limit uint32,
+) (*iotajsonrpc.CoinPage, error) {
+	// Bare "0x2::coin::Coin" without type param matches all Coin<T> objects.
+	return c.listCoins(ctx, owner, "0x2::coin::Coin", "", cursor, limit)
+}
+
+// listCoins is the shared implementation for GetCoins / GetAllCoins.
+// objectTypeFilter is the type string sent to the server; coinType is the
+// value stored in the returned Coin (empty string = derive from BCS).
+func (c *Client) listCoins(
+	ctx context.Context,
+	owner *iotago.Address,
+	objectTypeFilter string,
+	coinType string,
+	cursor []byte,
+	limit uint32,
+) (*iotajsonrpc.CoinPage, error) {
+	req := &state_service.ListOwnedObjectsRequest{
+		Owner:      addressToProto(owner),
+		ObjectType: &objectTypeFilter,
+		PageToken:  cursor,
+	}
+	if limit > 0 {
+		req.PageSize = &limit
+	}
+
+	resp, err := c.state.ListOwnedObjects(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("listCoins(%s): %w", objectTypeFilter, err)
+	}
+
+	coins := make([]*iotajsonrpc.Coin, 0, len(resp.GetObjects()))
+	for _, obj := range resp.GetObjects() {
+		ref := obj.GetReference()
+		if ref == nil || obj.GetBcs() == nil {
+			continue
+		}
+		coin, err := parseCoinFromObjectBCS(obj.GetBcs().GetData(), ref, coinType)
+		if err != nil {
+			return nil, fmt.Errorf("listCoins: parse object: %w", err)
+		}
+		coins = append(coins, coin)
+	}
+
+	page := &iotajsonrpc.CoinPage{Data: coins}
+	if tok := resp.GetNextPageToken(); len(tok) > 0 {
+		nextCursor := iotago.ObjectID(tok)
+		page.NextCursor = &nextCursor
+		page.HasNextPage = true
+	}
+	return page, nil
+}
+
+// GetCoinObjsForTargetAmount fetches IOTA coins and picks enough to cover
+// targetAmount+gasAmount. Replaces the HTTP-backed helper of the same name.
+func (c *Client) GetCoinObjsForTargetAmount(
+	ctx context.Context,
+	owner *iotago.Address,
+	targetAmount uint64,
+	gasAmount uint64,
+) (iotajsonrpc.Coins, error) {
+	coinType := iotajsonrpc.IotaCoinType.String()
+	var cursor []byte
+	const pageSize = uint32(200)
+	// Collect all pages into one CoinPage for PickupCoins.
+	combined := &iotajsonrpc.CoinPage{}
+
+	for {
+		page, err := c.GetCoins(ctx, owner, coinType, cursor, pageSize)
+		if err != nil {
+			return nil, fmt.Errorf("GetCoinObjsForTargetAmount: %w", err)
+		}
+		combined.Data = append(combined.Data, page.Data...)
+		if !page.HasNextPage {
+			break
+		}
+		cursor = page.NextCursor[:]
+	}
+
+	picked, err := iotajsonrpc.PickupCoins(combined, nil, gasAmount, 0, 25)
+	if err != nil {
+		return nil, err
+	}
+	_ = targetAmount
+	return picked.Coins, nil
+}
+
+// ── CoinMetadata ──────────────────────────────────────────────────────────────
+
+// GetCoinMetadata returns metadata for coinType. Replaces iotax_getCoinMetadata.
+func (c *Client) GetCoinMetadata(
+	ctx context.Context,
+	coinType string,
+) (*iotajsonrpc.IotaCoinMetadata, error) {
+	resp, err := c.state.GetCoinInfo(ctx, &state_service.GetCoinInfoRequest{
+		CoinType: &coinType,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("GetCoinMetadata(%s): %w", coinType, err)
+	}
+	m := resp.GetMetadata()
+	if m == nil {
+		return nil, fmt.Errorf("GetCoinMetadata(%s): no metadata in response", coinType)
+	}
+
+	var id *iotago.ObjectID
+	if raw := m.GetId(); raw != nil {
+		oid := iotago.ObjectID(raw.GetObjectId())
+		id = &oid
+	}
+
+	return &iotajsonrpc.IotaCoinMetadata{
+		Name:        m.GetName(),
+		Symbol:      m.GetSymbol(),
+		Decimals:    uint8(m.GetDecimals()),
+		Description: m.GetDescription(),
+		IconUrl:     m.GetIconUrl(),
+		Id:          id,
+	}, nil
+}
+
+// ── Reference gas price ───────────────────────────────────────────────────────
+
+// GetReferenceGasPrice returns the reference gas price for the current epoch.
+// Replaces iotax_getReferenceGasPrice.
+func (c *Client) GetReferenceGasPrice(ctx context.Context) (*iotajsonrpc.BigInt, error) {
+	resp, err := c.ledger.GetEpoch(ctx, &ledger_service.GetEpochRequest{})
+	if err != nil {
+		return nil, fmt.Errorf("GetReferenceGasPrice: %w", err)
+	}
+	if resp.GetEpoch() == nil {
+		return nil, fmt.Errorf("GetReferenceGasPrice: empty epoch response")
+	}
+	return iotajsonrpc.NewBigInt(resp.GetEpoch().GetReferenceGasPrice()), nil
+}
+
+// ── Owned objects ─────────────────────────────────────────────────────────────
+
+// OwnedObjectBCS holds a raw-BCS object returned by ListOwnedObjectsByType.
+type OwnedObjectBCS struct {
+	ObjectID iotago.ObjectID
+	Version  uint64
+	Digest   iotago.ObjectDigest
+	// BCS is the full VersionedObject BCS blob (as returned by gRPC).
+	BCS []byte
+}
+
+// ListOwnedObjectsByType returns all objects of objectType (e.g.
+// "0x<pkg>::request::Request") owned by owner, fetching all pages.
+// Replaces iotax_getOwnedObjects for the pullRequests use-case.
+func (c *Client) ListOwnedObjectsByType(
+	ctx context.Context,
+	owner *iotago.ObjectID,
+	objectType string,
+) ([]OwnedObjectBCS, error) {
+	ownerAddr := (*iotago.Address)(owner)
+	var results []OwnedObjectBCS
+	var cursor []byte
+
+	for {
+		resp, err := c.state.ListOwnedObjects(ctx, &state_service.ListOwnedObjectsRequest{
+			Owner:      addressToProto(ownerAddr),
+			ObjectType: &objectType,
+			PageToken:  cursor,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("ListOwnedObjectsByType(%s): %w", objectType, err)
+		}
+
+		for _, obj := range resp.GetObjects() {
+			ref := obj.GetReference()
+			if ref == nil {
+				continue
+			}
+			var objID iotago.ObjectID
+			copy(objID[:], ref.GetObjectId().GetObjectId())
+			digest := iotago.ObjectDigest(ref.GetDigest().GetDigest())
+
+			var bcsData []byte
+			if obj.GetBcs() != nil {
+				bcsData = obj.GetBcs().GetData()
+			}
+			results = append(results, OwnedObjectBCS{
+				ObjectID: objID,
+				Version:  ref.GetVersion(),
+				Digest:   digest,
+				BCS:      bcsData,
+			})
+		}
+
+		if tok := resp.GetNextPageToken(); len(tok) > 0 {
+			cursor = tok
+		} else {
+			break
+		}
+	}
+	return results, nil
+}
+
+// ── Dynamic fields ────────────────────────────────────────────────────────────
+
+// DynamicFieldEntry holds a single dynamic field returned by GetDynamicFields.
+type DynamicFieldEntry struct {
+	FieldID   iotago.ObjectID
+	NameBCS   []byte // BCS-encoded field name (key)
+	ValueBCS  []byte // BCS-encoded value (for FIELD kind; empty for OBJECT kind)
+	ValueType string // Move type string of the value, e.g. "0x2::balance::Balance<0x2::iota::IOTA>"
+
+	// For dynamic object fields (kind == OBJECT):
+	ChildID        *iotago.ObjectID // ObjectId of the child object
+	ChildObjectBCS []byte           // BCS of the child object itself
+}
+
+// GetDynamicFields returns all dynamic fields of parentID.
+// Replaces iotax_getDynamicFields.
+func (c *Client) GetDynamicFields(
+	ctx context.Context,
+	parentID *iotago.ObjectID,
+) ([]DynamicFieldEntry, error) {
+	var results []DynamicFieldEntry
+	var cursor []byte
+
+	for {
+		resp, err := c.state.ListDynamicFields(ctx, &state_service.ListDynamicFieldsRequest{
+			Parent:    objectIDToProto(parentID),
+			PageToken: cursor,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("GetDynamicFields(%s): %w", parentID, err)
+		}
+
+		for _, df := range resp.GetDynamicFields() {
+			var fieldID iotago.ObjectID
+			if fid := df.GetFieldId(); fid != nil {
+				copy(fieldID[:], fid.GetObjectId())
+			}
+			entry := DynamicFieldEntry{
+				FieldID:   fieldID,
+				ValueType: df.GetValueType(),
+			}
+			if n := df.GetName(); n != nil {
+				entry.NameBCS = n.GetData()
+			}
+			if v := df.GetValue(); v != nil {
+				entry.ValueBCS = v.GetData()
+			}
+			if cid := df.GetChildId(); cid != nil {
+				oid := iotago.ObjectID(cid.GetObjectId())
+				entry.ChildID = &oid
+			}
+			if co := df.GetChildObject(); co != nil && co.GetBcs() != nil {
+				entry.ChildObjectBCS = co.GetBcs().GetData()
+			}
+			results = append(results, entry)
+		}
+
+		if tok := resp.GetNextPageToken(); len(tok) > 0 {
+			cursor = tok
+		} else {
+			break
+		}
+	}
+	return results, nil
+}
+
+// ── BCS parsing helpers ───────────────────────────────────────────────────────
+
+// parseCoinFromObjectBCS decodes a gRPC Object BCS blob (VersionedObject::V1)
+// and extracts the fields needed to populate a iotajsonrpc.Coin.
+//
+// The BCS layout (from iota-sdk-types/src/object.rs) is:
+//
+//	VersionedObject = u8(0=V1) + Object
+//	Object          = ObjectData + Owner + Digest(32) + u64
+//	ObjectData      = u8(0=Struct) + MoveStruct
+//	MoveStruct      = MoveObjectType + u64(version) + Vec<u8>(contents)
+//	MoveObjectType  = u8(0=Other:StructTag | 1=GasCoin | 2=StakedIota | 3=Coin:TypeTag)
+//	contents        = [32 bytes ObjectID] [8 bytes balance u64-LE]
+//
+// coinTypeHint is the coin type string to embed in the result; if empty, the
+// coin type is derived from the BCS (GasCoin → IOTA coin type; others omitted).
+func parseCoinFromObjectBCS(
+	data []byte,
+	ref interface {
+		GetObjectId() *types_pb.ObjectId
+		GetVersion() uint64
+		GetDigest() *types_pb.Digest
+	},
+	coinTypeHint string,
+) (*iotajsonrpc.Coin, error) {
+	r := &bcsReader{buf: data}
+
+	// VersionedObject variant tag — must be 0 (V1)
+	if v, err := r.readU8(); err != nil || v != 0 {
+		return nil, fmt.Errorf("parseCoinFromObjectBCS: expected VersionedObject::V1 tag 0, got %d", v)
+	}
+
+	// ObjectData variant tag — must be 0 (Struct / MoveObject)
+	if v, err := r.readU8(); err != nil || v != 0 {
+		return nil, fmt.Errorf("parseCoinFromObjectBCS: expected ObjectData::Struct tag 0, got %d", v)
+	}
+
+	// MoveObjectType (custom compact BCS)
+	detectedCoinType, err := r.readMoveObjectType()
+	if err != nil {
+		return nil, fmt.Errorf("parseCoinFromObjectBCS: readMoveObjectType: %w", err)
+	}
+
+	// Use caller-supplied hint; fall back to detected type.
+	ct := coinTypeHint
+	if ct == "" {
+		ct = detectedCoinType
+	}
+
+	// version (u64 LE)
+	if _, err := r.readU64(); err != nil {
+		return nil, fmt.Errorf("parseCoinFromObjectBCS: read version: %w", err)
+	}
+
+	// contents: ULEB128 length + bytes
+	contents, err := r.readBytes()
+	if err != nil {
+		return nil, fmt.Errorf("parseCoinFromObjectBCS: read contents: %w", err)
+	}
+	if len(contents) < 40 {
+		return nil, fmt.Errorf("parseCoinFromObjectBCS: contents too short (%d bytes)", len(contents))
+	}
+	balance := binary.LittleEndian.Uint64(contents[32:40])
+
+	// Build result using the reference for ID/version/digest.
+	var objID iotago.ObjectID
+	copy(objID[:], ref.GetObjectId().GetObjectId())
+	digest := iotago.ObjectDigest(ref.GetDigest().GetDigest())
+
+	return &iotajsonrpc.Coin{
+		CoinType:     iotajsonrpc.CoinType(ct),
+		CoinObjectID: &objID,
+		Version:      iotajsonrpc.NewBigInt(ref.GetVersion()),
+		Digest:       &digest,
+		Balance:      iotajsonrpc.NewBigInt(balance),
+	}, nil
+}
+
+// ── tiny BCS reader ───────────────────────────────────────────────────────────
+
+type bcsReader struct {
+	buf []byte
+	pos int
+}
+
+func (r *bcsReader) readU8() (byte, error) {
+	if r.pos >= len(r.buf) {
+		return 0, fmt.Errorf("bcsReader: unexpected end of data at pos %d", r.pos)
+	}
+	b := r.buf[r.pos]
+	r.pos++
+	return b, nil
+}
+
+func (r *bcsReader) readU64() (uint64, error) {
+	if r.pos+8 > len(r.buf) {
+		return 0, fmt.Errorf("bcsReader: not enough bytes for u64 at pos %d", r.pos)
+	}
+	v := binary.LittleEndian.Uint64(r.buf[r.pos:])
+	r.pos += 8
+	return v, nil
+}
+
+func (r *bcsReader) readU32() (uint32, error) {
+	if r.pos+4 > len(r.buf) {
+		return 0, fmt.Errorf("bcsReader: not enough bytes for u32 at pos %d", r.pos)
+	}
+	v := binary.LittleEndian.Uint32(r.buf[r.pos:])
+	r.pos += 4
+	return v, nil
+}
+
+// readULEB128 decodes an unsigned LEB128 integer.
+func (r *bcsReader) readULEB128() (uint64, error) {
+	var result uint64
+	var shift uint
+	for {
+		b, err := r.readU8()
+		if err != nil {
+			return 0, err
+		}
+		result |= uint64(b&0x7F) << shift
+		if b&0x80 == 0 {
+			return result, nil
+		}
+		shift += 7
+		if shift >= 64 {
+			return 0, fmt.Errorf("bcsReader: ULEB128 overflow")
+		}
+	}
+}
+
+// readBytes reads a ULEB128-length-prefixed byte slice (BCS Vec<u8>).
+func (r *bcsReader) readBytes() ([]byte, error) {
+	length, err := r.readULEB128()
+	if err != nil {
+		return nil, err
+	}
+	if r.pos+int(length) > len(r.buf) {
+		return nil, fmt.Errorf("bcsReader: slice length %d exceeds buffer", length)
+	}
+	out := r.buf[r.pos : r.pos+int(length)]
+	r.pos += int(length)
+	return out, nil
+}
+
+// readString reads a ULEB128-prefixed UTF-8 string (BCS String / Identifier).
+func (r *bcsReader) readString() (string, error) {
+	b, err := r.readBytes()
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// skip advances the reader by n bytes.
+func (r *bcsReader) skip(n int) error {
+	if r.pos+n > len(r.buf) {
+		return fmt.Errorf("bcsReader: skip %d exceeds buffer", n)
+	}
+	r.pos += n
+	return nil
+}
+
+// readMoveObjectType parses the compact MoveObjectType BCS encoding and
+// returns a human-readable coin type string (e.g. "0x2::iota::IOTA").
+//
+// BCS encoding (from iota-sdk-types MoveObjectType):
+//
+//	0x00  Other      → full StructTag follows
+//	0x01  GasCoin    → no extra bytes
+//	0x02  StakedIota → no extra bytes
+//	0x03  Coin<T>    → TypeTag follows
+func (r *bcsReader) readMoveObjectType() (string, error) {
+	tag, err := r.readU8()
+	if err != nil {
+		return "", err
+	}
+	switch tag {
+	case 0x01: // GasCoin = 0x2::iota::IOTA
+		return iotajsonrpc.IotaCoinType.String(), nil
+	case 0x02: // StakedIota — not a coin we return from GetCoins
+		return "0x3::iota_system::StakedIota", nil
+	case 0x03: // Coin<T>: TypeTag follows
+		ct, err := r.readTypeTag()
+		if err != nil {
+			return "", fmt.Errorf("readMoveObjectType Coin<T>: %w", err)
+		}
+		return ct, nil
+	case 0x00: // Other: full StructTag
+		if err := r.skipStructTag(); err != nil {
+			return "", fmt.Errorf("readMoveObjectType Other: %w", err)
+		}
+		return "", nil
+	default:
+		return "", fmt.Errorf("readMoveObjectType: unknown tag %d", tag)
+	}
+}
+
+// readTypeTag parses a TypeTag and returns a human-readable string for struct
+// types, or skips non-struct types and returns "".
+//
+// TypeTag BCS tags:
+//
+//	0=bool, 1=u8, 2=u64, 3=u128, 4=address, 5=signer,
+//	6=vector(TypeTag), 7=struct(StructTag), 8=u16, 9=u32, 10=u256
+func (r *bcsReader) readTypeTag() (string, error) {
+	tag, err := r.readU8()
+	if err != nil {
+		return "", err
+	}
+	switch tag {
+	case 0, 1, 8, 9: // bool, u8, u16, u32 — no payload
+		return "", nil
+	case 2, 3: // u64, u128 — no payload
+		return "", nil
+	case 10: // u256 — no payload
+		return "", nil
+	case 4, 5: // address (32), signer (32) — no payload in type position
+		return "", nil
+	case 6: // vector<TypeTag>
+		_, err := r.readTypeTag()
+		return "", err
+	case 7: // struct(StructTag)
+		return r.readStructTag()
+	default:
+		return "", fmt.Errorf("readTypeTag: unknown tag %d", tag)
+	}
+}
+
+// readStructTag parses a StructTag and returns a human-readable string like
+// "0x2::iota::IOTA".
+func (r *bcsReader) readStructTag() (string, error) {
+	// address: 32 bytes
+	if err := r.skip(32); err != nil {
+		return "", err
+	}
+	// module: string
+	if _, err := r.readString(); err != nil {
+		return "", err
+	}
+	// name: string
+	if _, err := r.readString(); err != nil {
+		return "", err
+	}
+	// type_params: Vec<TypeTag> — skip count + each entry
+	count, err := r.readULEB128()
+	if err != nil {
+		return "", err
+	}
+	for i := uint64(0); i < count; i++ {
+		if _, err := r.readTypeTag(); err != nil {
+			return "", err
+		}
+	}
+	// We don't reconstruct the string from BCS — the caller always provides
+	// coinTypeHint from the filter, so the return value here is ignored.
+	return "", nil
+}
+
+// skipStructTag skips an entire StructTag without returning a value.
+func (r *bcsReader) skipStructTag() error {
+	_, err := r.readStructTag()
+	return err
+}
+
+// ── proto helpers ─────────────────────────────────────────────────────────────
+
+func addressToProto(addr *iotago.Address) *types_pb.Address {
+	if addr == nil {
+		return nil
+	}
+	return &types_pb.Address{Address: addr[:]}
+}
+
+func objectIDToProto(id *iotago.ObjectID) *types_pb.ObjectId {
+	if id == nil {
+		return nil
+	}
+	return &types_pb.ObjectId{ObjectId: id[:]}
+}
