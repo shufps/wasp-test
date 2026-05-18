@@ -11,13 +11,15 @@ import (
 	"github.com/iotaledger/wasp/clients/iota-go/iotaclient"
 	"github.com/iotaledger/wasp/clients/iota-go/iotago"
 	"github.com/iotaledger/wasp/clients/iota-go/iotajsonrpc"
+	"github.com/iotaledger/wasp/clients/iota-go/iotagrpc"
 	"github.com/iotaledger/wasp/packages/cryptolib"
 )
 
 // Client provides convenient methods to interact with the `isc` Move contracts.
 type Client struct {
 	*iotaclient.Client
-	faucetURL string
+	faucetURL  string
+	grpcClient *iotagrpc.Client // optional; if set, replaces indexer-backed iotax_* calls
 }
 
 func NewClient(client *iotaclient.Client, faucetURL string) *Client {
@@ -25,6 +27,13 @@ func NewClient(client *iotaclient.Client, faucetURL string) *Client {
 		Client:    client,
 		faucetURL: faucetURL,
 	}
+}
+
+// WithGRPCClient attaches a gRPC client that replaces indexer-backed iotax_*
+// JSON-RPC calls (getCoins, getDynamicFields, getCoinMetadata, etc.).
+func (c *Client) WithGRPCClient(grpc *iotagrpc.Client) *Client {
+	c.grpcClient = grpc
+	return c
 }
 
 func NewHTTPClient(apiURL, faucetURL string, waitUntilEffectsVisible *iotaclient.WaitParams) *Client {
