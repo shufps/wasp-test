@@ -2,17 +2,17 @@ package iotaconn
 
 const (
 	LocalnetEndpointURL = "http://localhost:9000"
-	AlphanetEndpointURL = "https://api.iota-rebased-alphanet.iota.cafe"
+	AlphanetEndpointURL = "https://api.alphanet.iota.cafe"
 	TestnetEndpointURL  = "https://api.testnet.iota.cafe"
 	DevnetEndpointURL   = "https://api.devnet.iota.cafe"
 
-	LocalnetGrpcEndpointURL = "grpc://localhost:9000"
-	AlphanetGrpcEndpointURL = "grpc://api.iota-rebased-alphanet.iota.cafe:9000"
-	TestnetGrpcEndpointURL  = "grpc://api.testnet.iota.cafe:9000"
-	DevnetGrpcEndpointURL   = "grpc://api.devnet.iota.cafe:9000"
+	LocalnetGrpcEndpointURL = "grpc://localhost:50051"
+	AlphanetGrpcEndpointURL = "grpc://grpc.alphanet.iota.cafe"
+	TestnetGrpcEndpointURL  = "grpc://grpc.testnet.iota.cafe"
+	DevnetGrpcEndpointURL   = "grpc://grpc.devnet.iota.cafe"
 
 	LocalnetFaucetURL = "http://localhost:9123/gas"
-	AlphanetFaucetURL = "https://faucet.iota-rebased-alphanet.iota.cafe/gas"
+	AlphanetFaucetURL = "https://faucet.alphanet.iota.cafe/gas"
 	TestnetFaucetURL  = "https://faucet.testnet.iota.cafe/gas"
 	DevnetFaucetURL   = "https://faucet.devnet.iota.cafe/gas"
 )

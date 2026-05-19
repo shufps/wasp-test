@@ -246,7 +246,7 @@ func TestSubscribeEvent(t *testing.T) {
 	log := testlogger.NewLogger(t)
 	api, err := iotaclient.NewWebsocket(
 		ctx,
-		"wss://api.iota-rebased-alphanet.iota.cafe",
+		"wss://api.alphanet.iota.cafe",
 		l1starter.WaitUntilEffectsVisible,
 		log,
 	)
@@ -308,7 +308,7 @@ func TestSubscribeTransaction(t *testing.T) {
 	log := testlogger.NewLogger(t)
 	api, err := iotaclient.NewWebsocket(
 		ctx,
-		"wss://api.iota-rebased-alphanet.iota.cafe",
+		"wss://api.alphanet.iota.cafe",
 		l1starter.WaitUntilEffectsVisible,
 		log,
 	)

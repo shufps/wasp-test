@@ -5,7 +5,7 @@ import (
 )
 
 type ParametersNodeCon struct {
-	GrpcURL               string `default:"grpc://localhost:9000" usage:"the gRPC address of the L1 IOTA node (grpc://host:port)"`
+	GrpcURL               string `default:"grpc://localhost:50051" usage:"the gRPC address of the L1 IOTA node (grpc://host:port)"`
 	PackageID             string `default:"" usage:"the identifier of the isc move package"`
 	MaxConnectionAttempts uint   `default:"30" usage:"the amount of times the connection to INX will be attempted before it fails (1 attempt per second)"`
 	TargetNetworkName     string `default:"" usage:"the network name on which the node should operate on (optional)"`

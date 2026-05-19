@@ -18,7 +18,7 @@
     ]
   },
   "l1": {
-    "grpcURL": "grpc://localhost:9000",
+    "grpcURL": "grpc://localhost:50051",
     "packageID": "",
     "maxConnectionAttempts": 30,
     "targetNetworkName": ""
