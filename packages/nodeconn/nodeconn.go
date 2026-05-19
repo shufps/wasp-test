@@ -58,7 +58,7 @@ type nodeConnection struct {
 	iscPackageID        iotago.PackageID
 	httpClient          *iscmoveclient.Client
 	l1ParamsFetcher     parameters.L1ParamsFetcher
-	wsURL               string
+	grpcURL             string
 	maxNumberOfRequests int
 	chainsLock          sync.RWMutex
 	chainsMap           *shrinkingmap.ShrinkingMap[isc.ChainID, *ncChain]
@@ -72,43 +72,29 @@ func New(
 	ctx context.Context,
 	iscPackageID iotago.PackageID,
 	maxNumberOfRequests int,
-	wsURL string,
-	httpURL string,
+	grpcURL string,
 	log log.Logger,
 	shutdownHandler *shutdown.ShutdownHandler,
 ) (chain.NodeConnection, error) {
-	httpClient := iscmoveclient.NewHTTPClient(httpURL, "", iotaclient.WaitForEffectsEnabled)
-
-	// When the streaming URL is a gRPC address, attach a gRPC client so that
-	// indexer-backed iotax_* JSON-RPC calls (getCoins, getDynamicFields, …)
-	// are also served via gRPC instead of HTTP JSON-RPC.
-	if len(wsURL) >= 7 && wsURL[:7] == "grpc://" {
-		grpcAddr := wsURL[7:]
-		grpcClient, err := iotagrpc.NewClient(grpcAddr)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create gRPC client for %s: %w", grpcAddr, err)
-		}
-		httpClient.WithGRPCClient(grpcClient)
+	if len(grpcURL) < 7 || grpcURL[:7] != "grpc://" {
+		return nil, fmt.Errorf("grpcURL must start with grpc://, got: %q", grpcURL)
 	}
+	grpcAddr := grpcURL[7:]
 
-	var paramsFetcher parameters.L1ParamsFetcher
-	if len(wsURL) >= 7 && wsURL[:7] == "grpc://" {
-		grpcAddr := wsURL[7:]
-		grpcParamsClient, err := iotagrpc.NewClient(grpcAddr)
-		if err == nil {
-			paramsFetcher = parameters.NewL1ParamsFetcherWithGRPC(httpClient.Client, grpcParamsClient, log)
-		} else {
-			log.LogWarnf("failed to create second gRPC client for params fetcher: %v, falling back to HTTP", err)
-			paramsFetcher = parameters.NewL1ParamsFetcher(httpClient.Client, log)
-		}
-	} else {
-		paramsFetcher = parameters.NewL1ParamsFetcher(httpClient.Client, log)
+	httpClient := iscmoveclient.NewHTTPClient("", "", iotaclient.WaitForEffectsEnabled)
+
+	grpcClient, err := iotagrpc.NewClient(grpcAddr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create gRPC client for %s: %w", grpcAddr, err)
 	}
+	httpClient.WithGRPCClient(grpcClient)
+
+	paramsFetcher := parameters.NewL1ParamsFetcherWithGRPC(httpClient.Client, grpcClient, log)
 
 	return &nodeConnection{
 		Logger:              log,
 		iscPackageID:        iscPackageID,
-		wsURL:               wsURL,
+		grpcURL:             grpcURL,
 		httpClient:          httpClient,
 		l1ParamsFetcher:     paramsFetcher,
 		maxNumberOfRequests: maxNumberOfRequests,
@@ -132,7 +118,7 @@ func (nc *nodeConnection) AttachChain(
 		nc.chainsLock.Lock()
 		defer nc.chainsLock.Unlock()
 
-		ncc, err := newNCChain(ctx, nc, chainID, recvRequest, recvAnchor, nc.wsURL)
+		ncc, err := newNCChain(ctx, nc, chainID, recvRequest, recvAnchor, nc.grpcURL)
 		if err != nil {
 			return nil, err
 		}

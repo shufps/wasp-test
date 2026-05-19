@@ -6,10 +6,10 @@ const (
 	TestnetEndpointURL  = "https://api.testnet.iota.cafe"
 	DevnetEndpointURL   = "https://api.devnet.iota.cafe"
 
-	LocalnetWebsocketEndpointURL = "ws://localhost:9000"
-	AlphanetWebsocketEndpointURL = "wss://api.iota-rebased-alphanet.iota.cafe"
-	TestnetWebsocketEndpointURL  = "wss://api.testnet.iota.cafe"
-	DevnetWebsocketEndpointURL   = "wss://api.devnet.iota.cafe"
+	LocalnetGrpcEndpointURL = "grpc://localhost:9000"
+	AlphanetGrpcEndpointURL = "grpc://api.iota-rebased-alphanet.iota.cafe:9000"
+	TestnetGrpcEndpointURL  = "grpc://api.testnet.iota.cafe:9000"
+	DevnetGrpcEndpointURL   = "grpc://api.devnet.iota.cafe:9000"
 
 	LocalnetFaucetURL = "http://localhost:9123/gas"
 	AlphanetFaucetURL = "https://faucet.iota-rebased-alphanet.iota.cafe/gas"

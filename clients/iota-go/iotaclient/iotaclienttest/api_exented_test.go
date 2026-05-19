@@ -8,7 +8,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/iotaledger/wasp/clients/iota-go/iotaclient"
-	"github.com/iotaledger/wasp/clients/iota-go/iotaconn"
 	"github.com/iotaledger/wasp/clients/iota-go/iotago"
 	"github.com/iotaledger/wasp/clients/iota-go/iotago/serialization"
 	"github.com/iotaledger/wasp/clients/iota-go/iotajsonrpc"
@@ -247,7 +246,7 @@ func TestSubscribeEvent(t *testing.T) {
 	log := testlogger.NewLogger(t)
 	api, err := iotaclient.NewWebsocket(
 		ctx,
-		iotaconn.AlphanetWebsocketEndpointURL,
+		"wss://api.iota-rebased-alphanet.iota.cafe",
 		l1starter.WaitUntilEffectsVisible,
 		log,
 	)
@@ -309,7 +308,7 @@ func TestSubscribeTransaction(t *testing.T) {
 	log := testlogger.NewLogger(t)
 	api, err := iotaclient.NewWebsocket(
 		ctx,
-		iotaconn.AlphanetWebsocketEndpointURL,
+		"wss://api.iota-rebased-alphanet.iota.cafe",
 		l1starter.WaitUntilEffectsVisible,
 		log,
 	)

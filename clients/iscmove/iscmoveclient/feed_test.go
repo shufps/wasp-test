@@ -44,7 +44,7 @@ func TestRequestsFeed(t *testing.T) {
 		l1starter.ISCPackageID(),
 		*anchor.ObjectID,
 		log,
-		iotaconn.AlphanetWebsocketEndpointURL,
+		iotaconn.AlphanetGrpcEndpointURL,
 		httpClient,
 	)
 	require.NoError(t, err)

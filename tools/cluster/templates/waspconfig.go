@@ -19,8 +19,7 @@ type WaspConfigParams struct {
 	ValidatorAddress       string // bech32 encoded address of ValidatorKeyPair
 	PruningMinStatesToKeep int
 	PackageID              *iotago.PackageID
-	L1HttpHost             string
-	L1WsHost               string
+	L1GrpcURL              string
 	AuthScheme             string
 }
 
@@ -52,8 +51,7 @@ var WaspConfig = `
     "disableEvents": true
   },
   "l1": {
-    "httpURL": "{{.L1HttpHost}}",
-    "websocketURL": "{{.L1WsHost}}",
+    "grpcURL": "{{.L1GrpcURL}}",
     "packageID": "{{.PackageID}}",
     "maxConnectionAttempts": 30,
     "targetNetworkName": "IOTA"

@@ -71,9 +71,7 @@ func NewConfig(waspConfig WaspConfig, l1Config l1starter.IotaNodeEndpoint, modif
 		if err != nil {
 			panic(fmt.Errorf("invalid API URL: %s", apiURL))
 		}
-		// FIXME we need to handle non-SSL URLs too
-		nodesConfigs[i].L1HttpHost = "https://" + base.Host + base.Path
-		nodesConfigs[i].L1WsHost = "wss://" + base.Host + base.Path
+		nodesConfigs[i].L1GrpcURL = "grpc://" + base.Host + base.Path
 	}
 
 	return &ClusterConfig{

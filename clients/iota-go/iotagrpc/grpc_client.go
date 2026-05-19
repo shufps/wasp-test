@@ -592,7 +592,7 @@ func (c *Client) GetObjectBCS(ctx context.Context, objectID *iotago.ObjectID, ve
 				{ObjectRef: ref},
 			},
 		},
-		ReadMask: &fieldmaskpb.FieldMask{Paths: []string{"object_id", "version", "digest", "bcs"}},
+		ReadMask: &fieldmaskpb.FieldMask{Paths: []string{"bcs"}},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("GetObjectBCS(%s): stream: %w", objectID, err)
