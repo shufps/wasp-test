@@ -54,6 +54,7 @@ type IotaNodeEndpoint interface {
 	ISCPackageID() iotago.PackageID
 	APIURL() string
 	FaucetURL() string
+	GrpcURL() string
 	L1Client() clients.L1Client
 	IsLocal() bool
 }
@@ -92,7 +93,7 @@ func TestMain(m *testing.M) {
 	var node IotaNodeEndpoint
 
 	if !testConfig.IsLocal {
-		iotaNode := NewRemoteIotaNode(testConfig.APIURL, testConfig.FaucetURL, ISCPackageOwner)
+		iotaNode := NewRemoteIotaNodeWithGrpc(testConfig.APIURL, testConfig.FaucetURL, testConfig.GrpcURL, ISCPackageOwner)
 		iotaNode.start(context.Background())
 
 		node = iotaNode
@@ -115,7 +116,7 @@ func TestMain(m *testing.M) {
 
 func ClusterStart(config L1EndpointConfig) IotaNodeEndpoint {
 	if !config.IsLocal {
-		iotaNode := NewRemoteIotaNode(config.APIURL, config.FaucetURL, ISCPackageOwner)
+		iotaNode := NewRemoteIotaNodeWithGrpc(config.APIURL, config.FaucetURL, config.GrpcURL, ISCPackageOwner)
 		iotaNode.start(context.Background())
 
 		var iotaNodeEndpoint IotaNodeEndpoint = iotaNode

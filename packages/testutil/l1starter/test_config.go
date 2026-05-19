@@ -14,6 +14,7 @@ type L1EndpointConfig struct {
 	RandomizeSeed bool
 	APIURL        string
 	FaucetURL     string
+	GrpcURL       string // optional; if empty, derived from APIURL by replacing http(s):// with grpc://
 }
 
 func TryDockerAvailability(ctx context.Context) error {
@@ -59,5 +60,6 @@ func LoadConfig() *L1EndpointConfig {
 		IsLocal:   false,
 		APIURL:    c.GetString("API_URL"),
 		FaucetURL: c.GetString("FAUCET_URL"),
+		GrpcURL:   c.GetString("GRPC_URL"),
 	}
 }
