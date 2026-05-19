@@ -18,6 +18,7 @@ import (
 	"github.com/iotaledger/wasp/clients/iota-go/iotago"
 	"github.com/iotaledger/wasp/clients/iota-go/iotajsonrpc"
 	"github.com/iotaledger/wasp/clients/iota-go/iotasigner"
+	"github.com/iotaledger/wasp/clients/iota-go/iotagrpc"
 	"github.com/iotaledger/wasp/clients/iscmove/iscmoveclient"
 	"github.com/iotaledger/wasp/packages/chain"
 	"github.com/iotaledger/wasp/packages/chain/cons/cons_gr"
@@ -78,6 +79,18 @@ func New(
 	shutdownHandler *shutdown.ShutdownHandler,
 ) (chain.NodeConnection, error) {
 	httpClient := iscmoveclient.NewHTTPClient(httpURL, "", iotaclient.WaitForEffectsEnabled)
+
+	// When the streaming URL is a gRPC address, attach a gRPC client so that
+	// indexer-backed iotax_* JSON-RPC calls (getCoins, getDynamicFields, …)
+	// are also served via gRPC instead of HTTP JSON-RPC.
+	if len(wsURL) >= 7 && wsURL[:7] == "grpc://" {
+		grpcAddr := wsURL[7:]
+		grpcClient, err := iotagrpc.NewClient(grpcAddr)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create gRPC client for %s: %w", grpcAddr, err)
+		}
+		httpClient.WithGRPCClient(grpcClient)
+	}
 
 	return &nodeConnection{
 		Logger:              log,
