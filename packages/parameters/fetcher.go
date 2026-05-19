@@ -8,8 +8,8 @@ import (
 
 	"github.com/iotaledger/hive.go/log"
 	"github.com/iotaledger/wasp/clients/iota-go/iotaclient"
-	"github.com/iotaledger/wasp/clients/iota-go/iotajsonrpc"
 	"github.com/iotaledger/wasp/clients/iota-go/iotagrpc"
+	"github.com/iotaledger/wasp/clients/iota-go/iotajsonrpc"
 	"github.com/iotaledger/wasp/packages/coin"
 )
 
@@ -65,6 +65,15 @@ func (f *l1ParamsFetcher) GetOrFetchLatest(ctx context.Context) (*L1Params, erro
 			f.log.LogError("Failed to fetch latest L1Params", err)
 			return nil, err
 		}
+		f.log.LogInfof("Fetched L1Params: epoch=%d protocolVersion=%d systemStateVersion=%d referenceGasPrice=%d epochStartTimestampMs=%d epochDurationMs=%d totalSupply=%d",
+			latest.Protocol.Epoch.Int64(),
+			latest.Protocol.ProtocolVersion.Int64(),
+			latest.Protocol.SystemStateVersion.Int64(),
+			latest.Protocol.ReferenceGasPrice.Int64(),
+			latest.Protocol.EpochStartTimestampMs.Int64(),
+			latest.Protocol.EpochDurationMs.Int64(),
+			latest.BaseToken.TotalSupply,
+		)
 		f.latest = latest
 	}
 
@@ -102,9 +111,15 @@ func FetchLatestGRPC(ctx context.Context, grpcClient *iotagrpc.Client) (*L1Param
 				return nil, fmt.Errorf("can't get total supply: %w", err)
 			}
 
-			epochDurationMs := int64(24 * 60 * 60 * 1000) // default 24h
-			if epochInfo.EpochEndMs > 0 && epochInfo.EpochStartMs > 0 {
+			// Prefer the configured epoch duration decoded from BCS system state.
+			// Fall back to deriving it from start/end timestamps if available,
+			// and finally to 24h as a last resort.
+			epochDurationMs := epochInfo.EpochDurationMs
+			if epochDurationMs == 0 && epochInfo.EpochEndMs > 0 && epochInfo.EpochStartMs > 0 {
 				epochDurationMs = epochInfo.EpochEndMs - epochInfo.EpochStartMs
+			}
+			if epochDurationMs == 0 {
+				epochDurationMs = int64(24 * 60 * 60 * 1000) // last-resort default 24h
 			}
 
 			return &L1Params{

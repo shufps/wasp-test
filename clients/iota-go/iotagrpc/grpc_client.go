@@ -376,6 +376,7 @@ func (c *Client) GetDynamicFields(
 		resp, err := c.state.ListDynamicFields(ctx, &state_service.ListDynamicFieldsRequest{
 			Parent:    objectIDToProto(parentID),
 			PageToken: cursor,
+			ReadMask:  &fieldmaskpb.FieldMask{Paths: []string{"kind", "field_id", "name", "value", "value_type", "child_id"}},
 		})
 		if err != nil {
 			return nil, fmt.Errorf("GetDynamicFields(%s): %w", parentID, err)
@@ -500,10 +501,12 @@ type EpochInfo struct {
 	ReferenceGasPrice  uint64
 	EpochStartMs       int64
 	EpochEndMs         int64 // 0 if not yet known
+	EpochDurationMs    int64 // 0 if not parseable from BCS
 }
 
 // GetEpochInfo fetches current epoch info via gRPC LedgerService.GetEpoch.
-// It decodes the BcsSystemState to extract ProtocolVersion and SystemStateVersion.
+// It decodes the BcsSystemState to extract ProtocolVersion, SystemStateVersion,
+// and EpochDurationMs from the SystemParametersV1 struct.
 func (c *Client) GetEpochInfo(ctx context.Context) (*EpochInfo, error) {
 	resp, err := c.ledger.GetEpoch(ctx, &ledger_service.GetEpochRequest{
 		ReadMask: &fieldmaskpb.FieldMask{Paths: []string{"epoch", "bcs_system_state", "start", "end", "reference_gas_price"}},
@@ -527,26 +530,311 @@ func (c *Client) GetEpochInfo(ctx context.Context) (*EpochInfo, error) {
 		info.EpochEndMs = e.AsTime().UnixMilli()
 	}
 
-	// Decode BCS system state to get ProtocolVersion and SystemStateVersion.
-	// IotaSystemState BCS layout:
-	//   ULEB128 variant_tag (e.g. 1 for V2)
-	//   u64 epoch
-	//   u64 protocol_version
-	//   u64 system_state_version
+	// Decode BCS system state to extract ProtocolVersion, SystemStateVersion,
+	// and EpochDurationMs. Errors are ignored (best-effort); missing fields stay 0.
 	if bcsData := ep.GetBcsSystemState().GetData(); len(bcsData) > 0 {
-		r := &bcsReader{buf: bcsData}
-		if _, err := r.readULEB128(); err == nil { // skip variant tag
-			if _, err := r.readU64(); err == nil { // skip epoch (already have it)
-				if pv, err := r.readU64(); err == nil {
-					info.ProtocolVersion = pv
-				}
-				if ssv, err := r.readU64(); err == nil {
-					info.SystemStateVersion = ssv
-				}
+		_ = decodeSystemStateBCS(bcsData, info)
+	}
+	return info, nil
+}
+
+// decodeSystemStateBCS parses the BCS-encoded IotaSystemState and populates
+// ProtocolVersion, SystemStateVersion, and EpochDurationMs in info.
+//
+// IotaSystemState is a Rust enum:
+//
+//	V1 (tag 0): IotaSystemStateV1  — uses ValidatorSetV1
+//	V2 (tag 1): IotaSystemStateV2  — uses ValidatorSetV2 (adds committee_members Vec<u64>)
+//
+// Both variants share the same layout up through parameters.epoch_duration_ms:
+//
+//	ULEB128              variant_tag
+//	u64                  epoch
+//	u64                  protocol_version
+//	u64                  system_state_version
+//	40 bytes             iota_treasury_cap  (UID(32) + Supply.value(8))
+//	ValidatorSet{V1|V2}  validators         (variable length)
+//	16 bytes             storage_fund       (Balance(8) + Balance(8))
+//	u64                  parameters.epoch_duration_ms  ← what we need
+func decodeSystemStateBCS(data []byte, info *EpochInfo) error {
+	r := &bcsReader{buf: data}
+
+	// Enum variant tag
+	variantTag, err := r.readULEB128()
+	if err != nil {
+		return err
+	}
+	// epoch — already have it from the gRPC response
+	if _, err := r.readU64(); err != nil {
+		return err
+	}
+	// protocol_version
+	if pv, err := r.readU64(); err != nil {
+		return err
+	} else {
+		info.ProtocolVersion = pv
+	}
+	// system_state_version
+	if ssv, err := r.readU64(); err != nil {
+		return err
+	} else {
+		info.SystemStateVersion = ssv
+	}
+
+	// iota_treasury_cap: IotaTreasuryCap
+	//   inner: TreasuryCap { id: UID(32 bytes), total_supply: Supply { value: u64(8 bytes) } }
+	if err := r.skip(40); err != nil {
+		return err
+	}
+
+	// validators: ValidatorSetV1 or ValidatorSetV2
+	switch variantTag {
+	case 0: // IotaSystemState::V1 → ValidatorSetV1
+		if err := r.skipValidatorSetV1(); err != nil {
+			return err
+		}
+	case 1: // IotaSystemState::V2 → ValidatorSetV2
+		if err := r.skipValidatorSetV2(); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("decodeSystemStateBCS: unknown IotaSystemState variant %d", variantTag)
+	}
+
+	// storage_fund: StorageFundV1
+	//   total_object_storage_rebates: Balance { value: u64 }  (8 bytes)
+	//   non_refundable_balance:       Balance { value: u64 }  (8 bytes)
+	if err := r.skip(16); err != nil {
+		return err
+	}
+
+	// parameters: SystemParametersV1 — first field is epoch_duration_ms: u64
+	if epochDurationMs, err := r.readU64(); err != nil {
+		return err
+	} else {
+		info.EpochDurationMs = int64(epochDurationMs)
+	}
+
+	return nil
+}
+
+// skipValidatorSetV1 skips a BCS-encoded ValidatorSetV1:
+//
+//	u64                         total_stake
+//	Vec<ValidatorV1>            active_validators
+//	TableVec (40 bytes)         pending_active_validators
+//	Vec<u64>                    pending_removals
+//	Table (40 bytes)            staking_pool_mappings
+//	Table (40 bytes)            inactive_validators
+//	Table (40 bytes)            validator_candidates
+//	VecMap<Address, u64>        at_risk_validators   (each entry = 40 bytes)
+//	Bag (40 bytes)              extra_fields
+func (r *bcsReader) skipValidatorSetV1() error {
+	return r.skipValidatorSetInner(false)
+}
+
+// skipValidatorSetV2 skips a BCS-encoded ValidatorSetV2 (like V1 plus committee_members Vec<u64>):
+//
+//	u64                         total_stake
+//	Vec<ValidatorV1>            active_validators
+//	Vec<u64>                    committee_members        ← NEW in V2
+//	TableVec (40 bytes)         pending_active_validators
+//	Vec<u64>                    pending_removals
+//	Table (40 bytes)            staking_pool_mappings
+//	Table (40 bytes)            inactive_validators
+//	Table (40 bytes)            validator_candidates
+//	VecMap<Address, u64>        at_risk_validators
+//	Bag (40 bytes)              extra_fields
+func (r *bcsReader) skipValidatorSetV2() error {
+	return r.skipValidatorSetInner(true)
+}
+
+func (r *bcsReader) skipValidatorSetInner(v2 bool) error {
+	// total_stake: u64
+	if err := r.skip(8); err != nil {
+		return err
+	}
+	// active_validators: Vec<ValidatorV1>
+	count, err := r.readULEB128()
+	if err != nil {
+		return err
+	}
+	for i := uint64(0); i < count; i++ {
+		if err := r.skipValidatorV1(); err != nil {
+			return fmt.Errorf("skipValidatorSet: validator %d: %w", i, err)
+		}
+	}
+	if v2 {
+		// committee_members: Vec<u64>
+		cmCount, err := r.readULEB128()
+		if err != nil {
+			return err
+		}
+		if err := r.skip(int(cmCount) * 8); err != nil {
+			return err
+		}
+	}
+	// pending_active_validators: TableVec = { contents: Table = { id: ObjectID(32), size: u64(8) } } = 40 bytes
+	if err := r.skip(40); err != nil {
+		return err
+	}
+	// pending_removals: Vec<u64>
+	prCount, err := r.readULEB128()
+	if err != nil {
+		return err
+	}
+	if err := r.skip(int(prCount) * 8); err != nil {
+		return err
+	}
+	// staking_pool_mappings, inactive_validators, validator_candidates: Table (40 bytes each)
+	if err := r.skip(40 * 3); err != nil {
+		return err
+	}
+	// at_risk_validators: VecMap<IotaAddress, u64>
+	//   Vec<Entry<IotaAddress, u64>>: ULEB128 + count × (32 + 8) bytes
+	arCount, err := r.readULEB128()
+	if err != nil {
+		return err
+	}
+	if err := r.skip(int(arCount) * 40); err != nil {
+		return err
+	}
+	// extra_fields: Bag = { id: UID(32), size: u64(8) } = 40 bytes
+	return r.skip(40)
+}
+
+// skipValidatorV1 skips a BCS-encoded ValidatorV1:
+//
+//	ValidatorMetadataV1   metadata
+//	u64                   voting_power
+//	ID (32 bytes)         operation_cap_id
+//	u64                   gas_price
+//	StakingPoolV1         staking_pool
+//	u64                   commission_rate
+//	u64                   next_epoch_stake
+//	u64                   next_epoch_gas_price
+//	u64                   next_epoch_commission_rate
+//	Bag (40 bytes)        extra_fields
+func (r *bcsReader) skipValidatorV1() error {
+	if err := r.skipValidatorMetadataV1(); err != nil {
+		return err
+	}
+	// voting_power(8) + operation_cap_id(32) + gas_price(8)
+	if err := r.skip(48); err != nil {
+		return err
+	}
+	if err := r.skipStakingPoolV1(); err != nil {
+		return err
+	}
+	// commission_rate(8) + next_epoch_stake(8) + next_epoch_gas_price(8) + next_epoch_commission_rate(8) + extra_fields Bag(40)
+	return r.skip(72)
+}
+
+// skipValidatorMetadataV1 skips a BCS-encoded ValidatorMetadataV1:
+//
+//	IotaAddress (32 bytes)              iota_address
+//	Vec<u8>                             authority_pubkey_bytes
+//	Vec<u8>                             network_pubkey_bytes
+//	Vec<u8>                             protocol_pubkey_bytes
+//	Vec<u8>                             proof_of_possession_bytes
+//	String                              name
+//	String                              description
+//	String                              image_url
+//	String                              project_url
+//	String                              net_address
+//	String                              p2p_address
+//	String                              primary_address
+//	Option<Vec<u8>>                     next_epoch_authority_pubkey_bytes
+//	Option<Vec<u8>>                     next_epoch_proof_of_possession
+//	Option<Vec<u8>>                     next_epoch_network_pubkey_bytes
+//	Option<Vec<u8>>                     next_epoch_protocol_pubkey_bytes
+//	Option<String>                      next_epoch_net_address
+//	Option<String>                      next_epoch_p2p_address
+//	Option<String>                      next_epoch_primary_address
+//	Bag (40 bytes)                      extra_fields
+func (r *bcsReader) skipValidatorMetadataV1() error {
+	// iota_address: IotaAddress = 32 bytes
+	if err := r.skip(32); err != nil {
+		return err
+	}
+	// 4 × Vec<u8>: authority_pubkey, network_pubkey, protocol_pubkey, proof_of_possession
+	for i := 0; i < 4; i++ {
+		if _, err := r.readBytes(); err != nil {
+			return err
+		}
+	}
+	// 7 × String: name, description, image_url, project_url, net_address, p2p_address, primary_address
+	for i := 0; i < 7; i++ {
+		if _, err := r.readBytes(); err != nil {
+			return err
+		}
+	}
+	// 7 × Option<Vec<u8> or String>: next_epoch_* fields
+	// In BCS, Option<T> = 0x00 (None) | 0x01 + T (Some).
+	// Both Vec<u8> and String are ULEB128-prefixed byte slices.
+	for i := 0; i < 7; i++ {
+		tag, err := r.readU8()
+		if err != nil {
+			return err
+		}
+		if tag == 1 { // Some(value)
+			if _, err := r.readBytes(); err != nil {
+				return err
 			}
 		}
 	}
-	return info, nil
+	// extra_fields: Bag = { id: UID(32), size: u64(8) } = 40 bytes
+	return r.skip(40)
+}
+
+// skipStakingPoolV1 skips a BCS-encoded StakingPoolV1:
+//
+//	ObjectID (32 bytes)    id
+//	Option<u64>            activation_epoch
+//	Option<u64>            deactivation_epoch
+//	u64                    iota_balance
+//	Balance (8 bytes)      rewards_pool
+//	u64                    pool_token_balance
+//	Table (40 bytes)       exchange_rates
+//	u64                    pending_stake
+//	u64                    pending_total_iota_withdraw
+//	u64                    pending_pool_token_withdraw
+//	Bag (40 bytes)         extra_fields
+func (r *bcsReader) skipStakingPoolV1() error {
+	// id: ObjectID = 32 bytes
+	if err := r.skip(32); err != nil {
+		return err
+	}
+	// activation_epoch: Option<u64>
+	if tag, err := r.readU8(); err != nil {
+		return err
+	} else if tag == 1 {
+		if err := r.skip(8); err != nil {
+			return err
+		}
+	}
+	// deactivation_epoch: Option<u64>
+	if tag, err := r.readU8(); err != nil {
+		return err
+	} else if tag == 1 {
+		if err := r.skip(8); err != nil {
+			return err
+		}
+	}
+	// iota_balance(8) + rewards_pool Balance(8) + pool_token_balance(8)
+	if err := r.skip(24); err != nil {
+		return err
+	}
+	// exchange_rates: Table = { id: ObjectID(32), size: u64(8) } = 40 bytes
+	if err := r.skip(40); err != nil {
+		return err
+	}
+	// pending_stake(8) + pending_total_iota_withdraw(8) + pending_pool_token_withdraw(8) = 24
+	if err := r.skip(24); err != nil {
+		return err
+	}
+	// extra_fields: Bag = 40 bytes
+	return r.skip(40)
 }
 
 // GetTotalSupply returns the total supply of coinType via GetCoinInfo.

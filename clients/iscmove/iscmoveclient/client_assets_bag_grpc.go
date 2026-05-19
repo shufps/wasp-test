@@ -16,7 +16,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"strings"
+	"os"
 
 	"github.com/iotaledger/bcs-go"
 
@@ -34,6 +34,13 @@ func (c *Client) getAssetsBagWithBalancesGRPC(
 		return nil, fmt.Errorf("gRPC GetAssetsBagWithBalances: GetDynamicFields: %w", err)
 	}
 
+	if os.Getenv("DEBUG") != "" {
+		fmt.Fprintf(os.Stderr, "getAssetsBagWithBalancesGRPC: assetsBagID=%s fields=%d\n", assetsBagID, len(fields))
+		for i, df := range fields {
+			fmt.Fprintf(os.Stderr, "  field[%d]: valueType=%q valueBCSLen=%d childID=%v\n", i, df.ValueType, len(df.ValueBCS), df.ChildID)
+		}
+	}
+
 	bag := iscmove.AssetsBagWithBalances{
 		AssetsBag: iscmove.AssetsBag{
 			ID:   *assetsBagID,
@@ -43,24 +50,25 @@ func (c *Client) getAssetsBagWithBalancesGRPC(
 	}
 
 	for _, df := range fields {
-		// Distinguish coin fields from object fields by value_type prefix.
-		// Coin: value_type = "0x2::balance::Balance<...>"
-		// Object: value_type = the full object type, child_id is set.
-		if strings.HasPrefix(df.ValueType, "0x2::balance::Balance<") {
-			// Extract coin type from "0x2::balance::Balance<{coinType}>"
-			coinTypeStr := df.ValueType[len("0x2::balance::Balance<") : len(df.ValueType)-1]
+		if df.ValueType == "" {
+			continue
+		}
+		// Parse the value type — handles both short (0x2) and full (0x0000...0002) address forms.
+		rt, err := iotago.NewResourceType(df.ValueType)
+		if err != nil {
+			return nil, fmt.Errorf("gRPC GetAssetsBagWithBalances: parse value type %q: %w", df.ValueType, err)
+		}
 
-			coinType, err := iotajsonrpc.CoinTypeFromString(coinTypeStr)
+		if rt.Module == "balance" && rt.ObjectName == "Balance" && rt.SubType1 != nil {
+			// Coin field: Balance<T> — extract the inner coin type.
+			coinType, err := iotajsonrpc.CoinTypeFromString(rt.SubType1.String())
 			if err != nil {
-				return nil, fmt.Errorf("gRPC GetAssetsBagWithBalances: parse coin type %q: %w", coinTypeStr, err)
+				return nil, fmt.Errorf("gRPC GetAssetsBagWithBalances: parse coin type: %w", err)
 			}
-
-			// ValueBCS for a Balance<T> is BCS-encoded u64 (the balance value).
 			balance, err := decodeBalanceBCS(df.ValueBCS)
 			if err != nil {
-				return nil, fmt.Errorf("gRPC GetAssetsBagWithBalances: decode balance for %s: %w", coinTypeStr, err)
+				return nil, fmt.Errorf("gRPC GetAssetsBagWithBalances: decode balance for %s: %w", coinType, err)
 			}
-
 			bag.SetCoin(coinType, iotajsonrpc.CoinValue(balance))
 		} else if df.ChildID != nil {
 			// Dynamic object field — child_id is the owned object's ID.
@@ -70,7 +78,7 @@ func (c *Client) getAssetsBagWithBalancesGRPC(
 			}
 			bag.AddObject(*df.ChildID, typ)
 		}
-		// Entries with neither a Balance prefix nor a child_id are unexpected; skip.
+		// Other entries are unexpected; skip.
 	}
 
 	return &bag, nil

@@ -184,6 +184,15 @@ func InitChainByAnchor(
 	if err != nil {
 		return nil, err
 	}
+
+	// If the genesis block is already in the store (e.g. on a node restart),
+	// return it directly without recomputing. Recomputing genesis requires the
+	// exact L1Params used at origination time; after an epoch change those params
+	// differ and would produce a mismatched hash.
+	if existing, err := chainStore.BlockByTrieRoot(stateMetadata.L1Commitment.TrieRoot()); err == nil {
+		return existing, nil
+	}
+
 	originBlock, _ := InitChain(
 		stateMetadata.SchemaVersion,
 		chainStore,
