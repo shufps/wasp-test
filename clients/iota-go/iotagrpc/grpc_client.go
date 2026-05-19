@@ -459,12 +459,35 @@ func (c *Client) SimulateTransaction(ctx context.Context, txBytes []byte) error 
 	return nil
 }
 
+// bcsEncodeBytes encodes a byte slice as a BCS Vec<u8>: ULEB128(len) + bytes.
+// The gRPC UserSignature.Bcs field supports both the "length prefixed" (BCS Vec<u8>)
+// and "not length prefixed" (raw bytes) forms as input. However, the raw form can be
+// misinterpreted: a signature starting with 0x00 (Ed25519 scheme flag) is parsed as
+// ULEB128 length = 0, yielding an empty slice and "missing signature scheme flag".
+// Sending the length-prefixed form avoids this ambiguity.
+func bcsEncodeBytes(b []byte) []byte {
+	length := uint64(len(b))
+	var prefix []byte
+	for {
+		octet := byte(length & 0x7F)
+		length >>= 7
+		if length != 0 {
+			octet |= 0x80
+		}
+		prefix = append(prefix, octet)
+		if length == 0 {
+			break
+		}
+	}
+	return append(prefix, b...)
+}
+
 // ExecuteTransaction submits a signed transaction via gRPC.
 // Returns the transaction digest on success.
 func (c *Client) ExecuteTransaction(ctx context.Context, txBytes []byte, signatures [][]byte) (string, error) {
 	sigs := make([]*signatures_pb.UserSignature, len(signatures))
 	for i, sig := range signatures {
-		sigs[i] = &signatures_pb.UserSignature{Bcs: &bcs_pb.BcsData{Data: sig}}
+		sigs[i] = &signatures_pb.UserSignature{Bcs: &bcs_pb.BcsData{Data: bcsEncodeBytes(sig)}}
 	}
 	resp, err := c.txExec.ExecuteTransactions(ctx, &transaction_execution_service.ExecuteTransactionsRequest{
 		Transactions: []*transaction_execution_service.ExecuteTransactionItem{
