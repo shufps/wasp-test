@@ -64,6 +64,10 @@ func (c *Client) RequestFunds(ctx context.Context, address cryptolib.Address) er
 }
 
 func (c *Client) Health(ctx context.Context) error {
+	if c.grpcClient != nil {
+		_, err := c.grpcClient.GetEpochInfo(ctx)
+		return err
+	}
 	_, err := c.GetLatestIotaSystemState(ctx)
 	return err
 }

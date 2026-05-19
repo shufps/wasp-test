@@ -10,14 +10,20 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
+	fieldmaskpb "google.golang.org/protobuf/types/known/fieldmaskpb"
 
+	bcs_pb "github.com/iotaledger/wasp/clients/iota-go/iotagrpc/iota/grpc/v1/bcs"
 	ledger_service "github.com/iotaledger/wasp/clients/iota-go/iotagrpc/iota/grpc/v1/ledger_service"
+	signatures_pb "github.com/iotaledger/wasp/clients/iota-go/iotagrpc/iota/grpc/v1/signatures"
 	state_service "github.com/iotaledger/wasp/clients/iota-go/iotagrpc/iota/grpc/v1/state_service"
+	transaction_pb "github.com/iotaledger/wasp/clients/iota-go/iotagrpc/iota/grpc/v1/transaction"
+	transaction_execution_service "github.com/iotaledger/wasp/clients/iota-go/iotagrpc/iota/grpc/v1/transaction_execution_service"
 	types_pb "github.com/iotaledger/wasp/clients/iota-go/iotagrpc/iota/grpc/v1/types"
 	"github.com/iotaledger/wasp/clients/iota-go/iotago"
 	"github.com/iotaledger/wasp/clients/iota-go/iotajsonrpc"
@@ -30,6 +36,7 @@ type Client struct {
 	conn    *grpc.ClientConn
 	ledger  ledger_service.LedgerServiceClient
 	state   state_service.StateServiceClient
+	txExec  transaction_execution_service.TransactionExecutionServiceClient
 	address string
 }
 
@@ -52,6 +59,7 @@ func NewClient(address string, opts ...grpc.DialOption) (*Client, error) {
 		conn:    conn,
 		ledger:  ledger_service.NewLedgerServiceClient(conn),
 		state:   state_service.NewStateServiceClient(conn),
+		txExec:  transaction_execution_service.NewTransactionExecutionServiceClient(conn),
 		address: address,
 	}, nil
 }
@@ -344,6 +352,288 @@ func (c *Client) GetDynamicFields(
 		}
 	}
 	return results, nil
+}
+
+// ── Transaction execution ─────────────────────────────────────────────────────
+
+// SimulateTransaction simulates (dry-runs) txBytes via gRPC.
+// Returns nil if simulation succeeds, or an error describing the execution failure.
+func (c *Client) SimulateTransaction(ctx context.Context, txBytes []byte) error {
+	resp, err := c.txExec.SimulateTransactions(ctx, &transaction_execution_service.SimulateTransactionsRequest{
+		Transactions: []*transaction_execution_service.SimulateTransactionItem{
+			{
+				Transaction: &transaction_pb.Transaction{
+					Bcs: &bcs_pb.BcsData{Data: txBytes},
+				},
+			},
+		},
+		ReadMask: &fieldmaskpb.FieldMask{Paths: []string{"execution_result"}},
+	})
+	if err != nil {
+		return fmt.Errorf("SimulateTransaction: rpc error: %w", err)
+	}
+	results := resp.GetTransactionResults()
+	if len(results) == 0 {
+		return fmt.Errorf("SimulateTransaction: empty response")
+	}
+	r := results[0]
+	if e := r.GetError(); e != nil {
+		return fmt.Errorf("SimulateTransaction: %s", e.GetMessage())
+	}
+	sim := r.GetSimulatedTransaction()
+	if sim == nil {
+		return fmt.Errorf("SimulateTransaction: no simulation result")
+	}
+	if execErr := sim.GetExecutionError(); execErr != nil {
+		src := execErr.GetSource()
+		if src == "" {
+			src = "execution failed"
+		}
+		return fmt.Errorf("SimulateTransaction: %s", src)
+	}
+	return nil
+}
+
+// ExecuteTransaction submits a signed transaction via gRPC.
+// Returns the transaction digest on success.
+func (c *Client) ExecuteTransaction(ctx context.Context, txBytes []byte, signatures [][]byte) (string, error) {
+	sigs := make([]*signatures_pb.UserSignature, len(signatures))
+	for i, sig := range signatures {
+		sigs[i] = &signatures_pb.UserSignature{Bcs: &bcs_pb.BcsData{Data: sig}}
+	}
+	resp, err := c.txExec.ExecuteTransactions(ctx, &transaction_execution_service.ExecuteTransactionsRequest{
+		Transactions: []*transaction_execution_service.ExecuteTransactionItem{
+			{
+				Transaction: &transaction_pb.Transaction{
+					Bcs: &bcs_pb.BcsData{Data: txBytes},
+				},
+				Signatures: &signatures_pb.UserSignatures{Signatures: sigs},
+			},
+		},
+		ReadMask: &fieldmaskpb.FieldMask{Paths: []string{"effects"}},
+	})
+	if err != nil {
+		return "", fmt.Errorf("ExecuteTransaction: rpc error: %w", err)
+	}
+	results := resp.GetTransactionResults()
+	if len(results) == 0 {
+		return "", fmt.Errorf("ExecuteTransaction: empty response")
+	}
+	r := results[0]
+	if e := r.GetError(); e != nil {
+		return "", fmt.Errorf("ExecuteTransaction: %s", e.GetMessage())
+	}
+	if r.GetExecutedTransaction() == nil {
+		return "", fmt.Errorf("ExecuteTransaction: no executed transaction in response")
+	}
+	return "", nil
+}
+
+// ── Epoch info ────────────────────────────────────────────────────────────────
+
+// EpochInfo holds system state info fetched via GetEpoch.
+type EpochInfo struct {
+	EpochID            uint64
+	ProtocolVersion    uint64
+	SystemStateVersion uint64
+	ReferenceGasPrice  uint64
+	EpochStartMs       int64
+	EpochEndMs         int64 // 0 if not yet known
+}
+
+// GetEpochInfo fetches current epoch info via gRPC LedgerService.GetEpoch.
+// It decodes the BcsSystemState to extract ProtocolVersion and SystemStateVersion.
+func (c *Client) GetEpochInfo(ctx context.Context) (*EpochInfo, error) {
+	resp, err := c.ledger.GetEpoch(ctx, &ledger_service.GetEpochRequest{
+		ReadMask: &fieldmaskpb.FieldMask{Paths: []string{"epoch", "bcs_system_state", "start", "end", "reference_gas_price"}},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("GetEpochInfo: %w", err)
+	}
+	ep := resp.GetEpoch()
+	if ep == nil {
+		return nil, fmt.Errorf("GetEpochInfo: no epoch in response")
+	}
+
+	info := &EpochInfo{
+		EpochID:           ep.GetEpoch(),
+		ReferenceGasPrice: ep.GetReferenceGasPrice(),
+	}
+	if s := ep.GetStart(); s != nil {
+		info.EpochStartMs = s.AsTime().UnixMilli()
+	}
+	if e := ep.GetEnd(); e != nil {
+		info.EpochEndMs = e.AsTime().UnixMilli()
+	}
+
+	// Decode BCS system state to get ProtocolVersion and SystemStateVersion.
+	// IotaSystemState BCS layout:
+	//   ULEB128 variant_tag (e.g. 1 for V2)
+	//   u64 epoch
+	//   u64 protocol_version
+	//   u64 system_state_version
+	if bcsData := ep.GetBcsSystemState().GetData(); len(bcsData) > 0 {
+		r := &bcsReader{buf: bcsData}
+		if _, err := r.readULEB128(); err == nil { // skip variant tag
+			if _, err := r.readU64(); err == nil { // skip epoch (already have it)
+				if pv, err := r.readU64(); err == nil {
+					info.ProtocolVersion = pv
+				}
+				if ssv, err := r.readU64(); err == nil {
+					info.SystemStateVersion = ssv
+				}
+			}
+		}
+	}
+	return info, nil
+}
+
+// GetTotalSupply returns the total supply of coinType via GetCoinInfo.
+func (c *Client) GetTotalSupply(ctx context.Context, coinType string) (uint64, error) {
+	resp, err := c.state.GetCoinInfo(ctx, &state_service.GetCoinInfoRequest{
+		CoinType: &coinType,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("GetTotalSupply(%s): %w", coinType, err)
+	}
+	if t := resp.GetTreasury(); t != nil {
+		return t.GetTotalSupply(), nil
+	}
+	return 0, nil
+}
+
+// ── Object fetching ───────────────────────────────────────────────────────────
+
+// ObjectData holds the result of a GetObjects call for a single object.
+type ObjectData struct {
+	ObjectID iotago.ObjectID
+	Version  uint64
+	Digest   iotago.ObjectDigest
+	// Contents is the Move struct content bytes (inside Vec<u8> in BCS).
+	Contents []byte
+	// Owner is the address owner (AddressOwner or ObjectOwner), or nil for Shared/Immutable.
+	Owner *iotago.Address
+}
+
+// GetObjectBCS fetches a single object by ID via gRPC GetObjects and decodes
+// the VersionedObject BCS to extract contents and owner.
+// version is optional (nil = latest).
+func (c *Client) GetObjectBCS(ctx context.Context, objectID *iotago.ObjectID, version *uint64) (*ObjectData, error) {
+	ref := &types_pb.ObjectReference{
+		ObjectId: &types_pb.ObjectId{ObjectId: objectID[:]},
+	}
+	if version != nil {
+		ref.Version = version
+	}
+	stream, err := c.ledger.GetObjects(ctx, &ledger_service.GetObjectsRequest{
+		Requests: &ledger_service.ObjectRequests{
+			Requests: []*ledger_service.ObjectRequest{
+				{ObjectRef: ref},
+			},
+		},
+		ReadMask: &fieldmaskpb.FieldMask{Paths: []string{"object_id", "version", "digest", "bcs"}},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("GetObjectBCS(%s): stream: %w", objectID, err)
+	}
+
+	for {
+		msg, err := stream.Recv()
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return nil, fmt.Errorf("GetObjectBCS(%s): recv: %w", objectID, err)
+		}
+		for _, objResult := range msg.GetObjects() {
+			if e := objResult.GetError(); e != nil {
+				return nil, fmt.Errorf("GetObjectBCS(%s): %s", objectID, e.GetMessage())
+			}
+			obj := objResult.GetObject()
+			if obj == nil {
+				continue
+			}
+			bcsData := obj.GetBcs().GetData()
+			if len(bcsData) == 0 {
+				return nil, fmt.Errorf("GetObjectBCS(%s): empty BCS", objectID)
+			}
+			return parseObjectBCS(objectID, bcsData)
+		}
+		if !msg.GetHasNext() {
+			break
+		}
+	}
+	return nil, fmt.Errorf("GetObjectBCS(%s): object not found", objectID)
+}
+
+// parseObjectBCS decodes a VersionedObject BCS blob and extracts the
+// Move struct contents, owner address, version, and digest.
+func parseObjectBCS(objectID *iotago.ObjectID, data []byte) (*ObjectData, error) {
+	r := &bcsReader{buf: data}
+
+	// VersionedObject variant tag = 0 (V1)
+	if v, err := r.readU8(); err != nil || v != 0 {
+		return nil, fmt.Errorf("parseObjectBCS: expected V1 tag, got %d (err: %v)", v, err)
+	}
+	// ObjectData variant tag = 0 (Struct/MoveObject)
+	if v, err := r.readU8(); err != nil || v != 0 {
+		return nil, fmt.Errorf("parseObjectBCS: expected Struct tag, got %d (err: %v)", v, err)
+	}
+	// MoveObjectType (compact encoding, skip it)
+	if _, err := r.readMoveObjectType(); err != nil {
+		return nil, fmt.Errorf("parseObjectBCS: readMoveObjectType: %w", err)
+	}
+	// version (u64)
+	version, err := r.readU64()
+	if err != nil {
+		return nil, fmt.Errorf("parseObjectBCS: read version: %w", err)
+	}
+	// contents: Vec<u8>
+	contents, err := r.readBytes()
+	if err != nil {
+		return nil, fmt.Errorf("parseObjectBCS: read contents: %w", err)
+	}
+	// Owner:
+	//   u8 = 0 (AddressOwner) → u8[32] address
+	//   u8 = 1 (ObjectOwner)  → u8[32] address
+	//   u8 = 2 (Shared)       → u64 initial_shared_version
+	//   u8 = 3 (Immutable)    → nothing
+	ownerTag, err := r.readU8()
+	if err != nil {
+		return nil, fmt.Errorf("parseObjectBCS: read owner tag: %w", err)
+	}
+	var owner *iotago.Address
+	switch ownerTag {
+	case 0, 1: // AddressOwner or ObjectOwner
+		var addr iotago.Address
+		if r.pos+32 > len(r.buf) {
+			return nil, fmt.Errorf("parseObjectBCS: owner address too short")
+		}
+		copy(addr[:], r.buf[r.pos:r.pos+32])
+		r.pos += 32
+		owner = &addr
+	case 2: // Shared
+		if _, err := r.readU64(); err != nil { // skip initial_shared_version
+			return nil, fmt.Errorf("parseObjectBCS: skip shared version: %w", err)
+		}
+	case 3: // Immutable, no extra bytes
+	default:
+		return nil, fmt.Errorf("parseObjectBCS: unknown owner tag %d", ownerTag)
+	}
+	// Digest: 32 bytes
+	if r.pos+32 > len(r.buf) {
+		return nil, fmt.Errorf("parseObjectBCS: digest too short")
+	}
+	var digest iotago.ObjectDigest
+	copy(digest[:], r.buf[r.pos:r.pos+32])
+
+	return &ObjectData{
+		ObjectID: *objectID,
+		Version:  version,
+		Digest:   digest,
+		Contents: contents,
+		Owner:    owner,
+	}, nil
 }
 
 // ── BCS parsing helpers ───────────────────────────────────────────────────────

@@ -11,7 +11,7 @@
 package transaction_execution_service
 
 import (
-	status "github.com/iotaledger/wasp/clients/iota-go/iotagrpc/google/rpc/status"
+	status "google.golang.org/genproto/googleapis/rpc/status"
 	_ "github.com/iotaledger/wasp/clients/iota-go/iotagrpc/iota/grpc/options"
 	bcs "github.com/iotaledger/wasp/clients/iota-go/iotagrpc/iota/grpc/v1/bcs"
 	command "github.com/iotaledger/wasp/clients/iota-go/iotagrpc/iota/grpc/v1/command"

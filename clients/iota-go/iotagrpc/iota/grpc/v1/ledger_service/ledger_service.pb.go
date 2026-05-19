@@ -11,7 +11,7 @@
 package ledger_service
 
 import (
-	status "github.com/iotaledger/wasp/clients/iota-go/iotagrpc/google/rpc/status"
+	status "google.golang.org/genproto/googleapis/rpc/status"
 	_ "github.com/iotaledger/wasp/clients/iota-go/iotagrpc/iota/grpc/options"
 	checkpoint "github.com/iotaledger/wasp/clients/iota-go/iotagrpc/iota/grpc/v1/checkpoint"
 	epoch "github.com/iotaledger/wasp/clients/iota-go/iotagrpc/iota/grpc/v1/epoch"

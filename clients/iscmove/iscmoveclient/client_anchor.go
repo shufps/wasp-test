@@ -12,6 +12,9 @@ import (
 	"github.com/iotaledger/wasp/packages/cryptolib"
 )
 
+// NOTE: GetAnchorFromObjectID and GetPastAnchorFromObjectID are defined in
+// client_grpc_overrides.go so they can route to gRPC when available.
+
 type StartNewChainRequest struct {
 	Signer        cryptolib.Signer
 	AnchorOwner   *cryptolib.Address
@@ -108,59 +111,6 @@ func (c *Client) ReceiveRequestsAndTransition(
 		[]*iotago.ObjectRef{req.GasPayment},
 		req.GasPrice,
 		req.GasBudget,
-	)
-}
-
-func (c *Client) GetAnchorFromObjectID(
-	ctx context.Context,
-	anchorObjectID *iotago.ObjectID,
-) (*iscmove.AnchorWithRef, error) {
-	getObjectResponse, err := c.GetObject(ctx, iotaclient.GetObjectRequest{
-		ObjectID: anchorObjectID,
-		Options:  &iotajsonrpc.IotaObjectDataOptions{ShowBcs: true, ShowOwner: true},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to get anchor content: %w", err)
-	}
-	if getObjectResponse.Error != nil {
-		return nil, fmt.Errorf("failed to get anchor content: %s", getObjectResponse.Error.Data.String())
-	}
-	return decodeAnchorBCS(
-		getObjectResponse.Data.Bcs.Data.MoveObject.BcsBytes,
-		getObjectResponse.Data.Ref(),
-		getObjectResponse.Data.Owner.AddressOwner,
-	)
-}
-
-func (c *Client) GetPastAnchorFromObjectID(
-	ctx context.Context,
-	anchorObjectID *iotago.ObjectID,
-	version uint64,
-) (*iscmove.AnchorWithRef, error) {
-	getObjectResponse, err := c.TryGetPastObject(ctx, iotaclient.TryGetPastObjectRequest{
-		ObjectID: anchorObjectID,
-		Version:  version,
-		Options:  &iotajsonrpc.IotaObjectDataOptions{ShowBcs: true, ShowOwner: true},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to get anchor content: %w", err)
-	}
-	if getObjectResponse.Data.ObjectDeleted != nil {
-		return nil, fmt.Errorf("failed to get anchor content: deleted")
-	}
-	if getObjectResponse.Data.ObjectNotExists != nil {
-		return nil, fmt.Errorf("failed to get anchor content: object does not exist")
-	}
-	if getObjectResponse.Data.VersionNotFound != nil {
-		return nil, fmt.Errorf("failed to get anchor content: version not found")
-	}
-	if getObjectResponse.Data.VersionTooHigh != nil {
-		return nil, fmt.Errorf("failed to get anchor content: version too high")
-	}
-	return decodeAnchorBCS(
-		getObjectResponse.Data.VersionFound.Bcs.Data.MoveObject.BcsBytes,
-		getObjectResponse.Data.VersionFound.Ref(),
-		getObjectResponse.Data.VersionFound.Owner.AddressOwner,
 	)
 }
 

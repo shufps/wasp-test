@@ -11,6 +11,7 @@ import (
 
 	"github.com/iotaledger/bcs-go"
 	"github.com/iotaledger/hive.go/log"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/iotaledger/wasp/clients/iota-go/iotaclient"
 	"github.com/iotaledger/wasp/clients/iota-go/iotago"
@@ -95,6 +96,7 @@ func (g *GRpcClientWrapper) SubscribeEvents(ctx context.Context) (<-chan iscmove
 	)
 
 	req := &ledger_pb.StreamCheckpointsRequest{
+		ReadMask: &fieldmaskpb.FieldMask{Paths: []string{"events"}},
 		EventsFilter: &filter_pb.EventFilter{
 			Filter: &filter_pb.EventFilter_MoveEventType{
 				MoveEventType: &filter_pb.MoveEventTypeFilter{
@@ -151,6 +153,7 @@ func (g *GRpcClientWrapper) SubscribeEvents(ctx context.Context) (<-chan iscmove
 // by transactions that affect the anchor object, then fetches the full anchor via HTTP.
 func (g *GRpcClientWrapper) SubscribeAnchorUpdates(ctx context.Context) (<-chan *iscmove.AnchorWithRef, error) {
 	req := &ledger_pb.StreamCheckpointsRequest{
+		ReadMask: &fieldmaskpb.FieldMask{Paths: []string{"transactions"}},
 		TransactionsFilter: &filter_pb.TransactionFilter{
 			Filter: &filter_pb.TransactionFilter_AffectedObject{
 				AffectedObject: &filter_pb.ObjectIdFilter{

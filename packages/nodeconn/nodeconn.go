@@ -92,13 +92,27 @@ func New(
 		httpClient.WithGRPCClient(grpcClient)
 	}
 
+	var paramsFetcher parameters.L1ParamsFetcher
+	if len(wsURL) >= 7 && wsURL[:7] == "grpc://" {
+		grpcAddr := wsURL[7:]
+		grpcParamsClient, err := iotagrpc.NewClient(grpcAddr)
+		if err == nil {
+			paramsFetcher = parameters.NewL1ParamsFetcherWithGRPC(httpClient.Client, grpcParamsClient, log)
+		} else {
+			log.LogWarnf("failed to create second gRPC client for params fetcher: %v, falling back to HTTP", err)
+			paramsFetcher = parameters.NewL1ParamsFetcher(httpClient.Client, log)
+		}
+	} else {
+		paramsFetcher = parameters.NewL1ParamsFetcher(httpClient.Client, log)
+	}
+
 	return &nodeConnection{
 		Logger:              log,
 		iscPackageID:        iscPackageID,
 		wsURL:               wsURL,
 		httpURL:             httpURL,
 		httpClient:          httpClient,
-		l1ParamsFetcher:     parameters.NewL1ParamsFetcher(httpClient.Client, log),
+		l1ParamsFetcher:     paramsFetcher,
 		maxNumberOfRequests: maxNumberOfRequests,
 		chainsMap: shrinkingmap.New[isc.ChainID, *ncChain](
 			shrinkingmap.WithShrinkingThresholdRatio(chainsCleanupThresholdRatio),
