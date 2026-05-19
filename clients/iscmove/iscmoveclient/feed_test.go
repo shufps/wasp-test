@@ -38,13 +38,14 @@ func TestRequestsFeed(t *testing.T) {
 
 	log := testlogger.NewLogger(t)
 
+	httpClient := iscmoveclient.NewHTTPClient(iotaconn.AlphanetEndpointURL, "", iotaclient.WaitForEffectsEnabled)
 	chainFeed, err := iscmoveclient.NewChainFeed(
 		ctx,
 		l1starter.ISCPackageID(),
 		*anchor.ObjectID,
 		log,
 		iotaconn.AlphanetWebsocketEndpointURL,
-		iotaconn.AlphanetEndpointURL,
+		httpClient,
 	)
 	require.NoError(t, err)
 	defer func() {

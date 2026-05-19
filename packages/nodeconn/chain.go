@@ -47,7 +47,6 @@ func newNCChain(
 	requestHandler chain.RequestHandler,
 	anchorHandler chain.AnchorHandler,
 	wsURL string,
-	httpURL string,
 ) (*ncChain, error) {
 	anchorAddress := chainID.AsAddress().AsIotaAddress()
 
@@ -57,7 +56,7 @@ func newNCChain(
 		*anchorAddress,
 		nodeConn.Logger,
 		wsURL,
-		httpURL,
+		nodeConn.httpClient,
 	)
 	if err != nil {
 		return nil, err

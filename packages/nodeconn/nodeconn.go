@@ -59,7 +59,6 @@ type nodeConnection struct {
 	httpClient          *iscmoveclient.Client
 	l1ParamsFetcher     parameters.L1ParamsFetcher
 	wsURL               string
-	httpURL             string
 	maxNumberOfRequests int
 	chainsLock          sync.RWMutex
 	chainsMap           *shrinkingmap.ShrinkingMap[isc.ChainID, *ncChain]
@@ -110,7 +109,6 @@ func New(
 		Logger:              log,
 		iscPackageID:        iscPackageID,
 		wsURL:               wsURL,
-		httpURL:             httpURL,
 		httpClient:          httpClient,
 		l1ParamsFetcher:     paramsFetcher,
 		maxNumberOfRequests: maxNumberOfRequests,
@@ -134,7 +132,7 @@ func (nc *nodeConnection) AttachChain(
 		nc.chainsLock.Lock()
 		defer nc.chainsLock.Unlock()
 
-		ncc, err := newNCChain(ctx, nc, chainID, recvRequest, recvAnchor, nc.wsURL, nc.httpURL)
+		ncc, err := newNCChain(ctx, nc, chainID, recvRequest, recvAnchor, nc.wsURL)
 		if err != nil {
 			return nil, err
 		}
@@ -261,8 +259,7 @@ func (nc *nodeConnection) WaitUntilInitiallySynced(ctx context.Context) error {
 			return ctx.Err()
 
 		case <-ticker.C:
-			_, err := nc.httpClient.GetLatestIotaSystemState(ctx)
-			if err != nil {
+			if err := nc.httpClient.Health(ctx); err != nil {
 				nc.LogWarnf("WaitUntilInitiallySynced: %s", err)
 				continue
 			}

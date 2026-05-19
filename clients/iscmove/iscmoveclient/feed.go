@@ -28,10 +28,8 @@ func NewChainFeed(
 	anchorAddress iotago.ObjectID,
 	log log.Logger,
 	socketURL string,
-	httpURL string,
+	httpClient *Client,
 ) (*ChainFeed, error) {
-	httpClient := NewHTTPClient(httpURL, "", iotaclient.WaitForEffectsEnabled)
-
 	eventClient, err := selectEventClient(log, socketURL, iscPackageID, anchorAddress, httpClient)
 	if err != nil {
 		return nil, err

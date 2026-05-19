@@ -15,10 +15,84 @@ import (
 
 	"github.com/iotaledger/wasp/clients/iota-go/iotaclient"
 	"github.com/iotaledger/wasp/clients/iota-go/iotago"
+	"github.com/iotaledger/wasp/clients/iota-go/iotago/serialization"
 	"github.com/iotaledger/wasp/clients/iota-go/iotajsonrpc"
+	"github.com/iotaledger/wasp/clients/iota-go/iotagrpc"
 	"github.com/iotaledger/wasp/clients/iota-go/iotasigner"
 	"github.com/iotaledger/wasp/clients/iscmove"
 )
+
+// GetObject fetches a single object by ID, routing to gRPC when available.
+// Constructs a synthetic IotaObjectResponse from the decoded VersionedObject BCS.
+func (c *Client) GetObject(ctx context.Context, req iotaclient.GetObjectRequest) (*iotajsonrpc.IotaObjectResponse, error) {
+	if c.grpcClient != nil {
+		od, err := c.grpcClient.GetObjectBCS(ctx, req.ObjectID, nil)
+		if err != nil {
+			return nil, err
+		}
+		return objectDataToResponse(od), nil
+	}
+	return c.Client.GetObject(ctx, req)
+}
+
+// GetOwnedObjects returns a page of objects owned by the given address,
+// routing to gRPC when available.
+func (c *Client) GetOwnedObjects(ctx context.Context, req iotaclient.GetOwnedObjectsRequest) (*iotajsonrpc.ObjectsPage, error) {
+	if c.grpcClient != nil {
+		objectType := ""
+		if req.Query != nil && req.Query.Filter != nil && req.Query.Filter.StructType != nil {
+			st := req.Query.Filter.StructType
+			objectType = fmt.Sprintf("0x%x::%s::%s", st.Address[:], st.Module, st.Name)
+		}
+		var cursor []byte
+		if req.Cursor != nil {
+			cursor = req.Cursor[:]
+		}
+		var limit uint32
+		if req.Limit != nil {
+			limit = uint32(*req.Limit)
+		}
+		page, err := c.grpcClient.ListOwnedObjectsPage(ctx, (*iotago.Address)(req.Address), objectType, cursor, limit)
+		if err != nil {
+			return nil, err
+		}
+		result := &iotajsonrpc.ObjectsPage{
+			HasNextPage: page.HasNextPage,
+			NextCursor:  page.NextCursor,
+		}
+		for _, od := range page.Objects {
+			result.Data = append(result.Data, *objectDataToResponse(od))
+		}
+		return result, nil
+	}
+	return c.Client.GetOwnedObjects(ctx, req)
+}
+
+// objectDataToResponse builds a synthetic IotaObjectResponse from a gRPC ObjectData.
+func objectDataToResponse(od *iotagrpc.ObjectData) *iotajsonrpc.IotaObjectResponse {
+	objID := od.ObjectID
+	digest := od.Digest
+	data := &iotajsonrpc.IotaObjectData{
+		ObjectID: &objID,
+		Version:  iotajsonrpc.NewBigInt(od.Version),
+		Digest:   &digest,
+		Bcs: &serialization.TagJson[iotajsonrpc.IotaRawData]{
+			Data: iotajsonrpc.IotaRawData{
+				MoveObject: &iotajsonrpc.IotaRawMoveObject{
+					BcsBytes: iotago.Base64Data(od.Contents),
+				},
+			},
+		},
+	}
+	if od.Owner != nil {
+		data.Owner = &iotajsonrpc.ObjectOwner{
+			ObjectOwnerInternal: &iotajsonrpc.ObjectOwnerInternal{
+				AddressOwner: od.Owner,
+			},
+		}
+	}
+	return &iotajsonrpc.IotaObjectResponse{Data: data}
+}
 
 // GetCoins returns up to req.Limit coin objects of req.CoinType owned by
 // req.Owner, starting after req.Cursor.  Routes to gRPC when available.

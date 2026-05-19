@@ -288,6 +288,67 @@ func (c *Client) ListOwnedObjectsByType(
 	return results, nil
 }
 
+// OwnedObjectsPage holds a single page of owned objects with decoded BCS.
+type OwnedObjectsPage struct {
+	Objects     []*ObjectData
+	NextCursor  *iotago.ObjectID
+	HasNextPage bool
+}
+
+// ListOwnedObjectsPage returns one page of objects of objectType owned by owner.
+// cursor is the page token from the previous page (nil = first page).
+// Replaces iotax_getOwnedObjects for paginated use.
+func (c *Client) ListOwnedObjectsPage(
+	ctx context.Context,
+	owner *iotago.Address,
+	objectType string,
+	cursor []byte,
+	limit uint32,
+) (*OwnedObjectsPage, error) {
+	req := &state_service.ListOwnedObjectsRequest{
+		Owner:     addressToProto(owner),
+		PageToken: cursor,
+	}
+	if objectType != "" {
+		req.ObjectType = &objectType
+	}
+	if limit > 0 {
+		req.PageSize = &limit
+	}
+
+	resp, err := c.state.ListOwnedObjects(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("ListOwnedObjectsPage(%s): %w", objectType, err)
+	}
+
+	result := &OwnedObjectsPage{}
+	for _, obj := range resp.GetObjects() {
+		ref := obj.GetReference()
+		if ref == nil {
+			continue
+		}
+		var objID iotago.ObjectID
+		copy(objID[:], ref.GetObjectId().GetObjectId())
+
+		bcsData := obj.GetBcs().GetData()
+		if len(bcsData) == 0 {
+			continue
+		}
+		od, err := parseObjectBCS(&objID, bcsData)
+		if err != nil {
+			continue
+		}
+		result.Objects = append(result.Objects, od)
+	}
+
+	if tok := resp.GetNextPageToken(); len(tok) > 0 {
+		nextCursor := iotago.ObjectID(tok)
+		result.NextCursor = &nextCursor
+		result.HasNextPage = true
+	}
+	return result, nil
+}
+
 // ── Dynamic fields ────────────────────────────────────────────────────────────
 
 // DynamicFieldEntry holds a single dynamic field returned by GetDynamicFields.
