@@ -338,6 +338,9 @@ func (c *Client) ListOwnedObjectsPage(
 		if err != nil {
 			continue
 		}
+		// Override version and digest from the reference field (correct values).
+		od.Version = ref.GetVersion()
+		od.Digest = iotago.ObjectDigest(ref.GetDigest().GetDigest())
 		result.Objects = append(result.Objects, od)
 	}
 
@@ -880,7 +883,7 @@ func (c *Client) GetObjectBCS(ctx context.Context, objectID *iotago.ObjectID, ve
 				{ObjectRef: ref},
 			},
 		},
-		ReadMask: &fieldmaskpb.FieldMask{Paths: []string{"bcs"}},
+		ReadMask: &fieldmaskpb.FieldMask{Paths: []string{"reference", "bcs"}},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("GetObjectBCS(%s): stream: %w", objectID, err)
@@ -906,7 +909,19 @@ func (c *Client) GetObjectBCS(ctx context.Context, objectID *iotago.ObjectID, ve
 			if len(bcsData) == 0 {
 				return nil, fmt.Errorf("GetObjectBCS(%s): empty BCS", objectID)
 			}
-			return parseObjectBCS(objectID, bcsData)
+			od, err := parseObjectBCS(objectID, bcsData)
+			if err != nil {
+				return nil, err
+			}
+			// Override version and digest from the response reference field.
+			// parseObjectBCS reads the BCS bytes and would read previous_transaction
+			// (32 bytes after the owner) as the digest, which is wrong.
+			// The reference field contains the correct version and object digest.
+			if objRef := obj.GetReference(); objRef != nil {
+				od.Version = objRef.GetVersion()
+				od.Digest = iotago.ObjectDigest(objRef.GetDigest().GetDigest())
+			}
+			return od, nil
 		}
 		if !msg.GetHasNext() {
 			break
