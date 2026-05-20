@@ -56,7 +56,7 @@ type nodeConnection struct {
 	log.Logger
 
 	iscPackageID        iotago.PackageID
-	httpClient          *iscmoveclient.Client
+	l1Client          *iscmoveclient.GRPCClient
 	l1ParamsFetcher     parameters.L1ParamsFetcher
 	grpcURL             string
 	maxNumberOfRequests int
@@ -85,7 +85,7 @@ func New(
 	if err != nil {
 		return nil, fmt.Errorf("failed to create gRPC client for %s: %w", grpcAddr, err)
 	}
-	httpClient := iscmoveclient.NewGRPCClient(grpcClient)
+	l1Client := iscmoveclient.NewGRPCClient(grpcClient) // *GRPCClient — pure gRPC, no JSON-RPC fallback
 
 	paramsFetcher := parameters.NewL1ParamsFetcher(grpcClient, log)
 
@@ -93,7 +93,7 @@ func New(
 		Logger:              log,
 		iscPackageID:        iscPackageID,
 		grpcURL:             grpcURL,
-		httpClient:          httpClient,
+		l1Client:          l1Client,
 		l1ParamsFetcher:     paramsFetcher,
 		maxNumberOfRequests: maxNumberOfRequests,
 		chainsMap: shrinkingmap.New[isc.ChainID, *ncChain](
@@ -184,7 +184,7 @@ func (nc *nodeConnection) ConsensusL1InfoProposal(
 			panic(err)
 		}
 
-		gasCoinGetObjectRes, err := nc.httpClient.GetObject(ctx, iotaclient.GetObjectRequest{
+		gasCoinGetObjectRes, err := nc.l1Client.GetObject(ctx, iotaclient.GetObjectRequest{
 			ObjectID: stateMetadata.GasCoinObjectID,
 			Options:  &iotajsonrpc.IotaObjectDataOptions{ShowBcs: true},
 		})
@@ -243,7 +243,7 @@ func (nc *nodeConnection) WaitUntilInitiallySynced(ctx context.Context) error {
 			return ctx.Err()
 
 		case <-ticker.C:
-			if err := nc.httpClient.Health(ctx); err != nil {
+			if err := nc.l1Client.Health(ctx); err != nil {
 				nc.LogWarnf("WaitUntilInitiallySynced: %s", err)
 				continue
 			}

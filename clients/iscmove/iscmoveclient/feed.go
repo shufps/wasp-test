@@ -16,7 +16,7 @@ import (
 
 type ChainFeed struct {
 	eventClient   EventListener
-	httpClient    *Client
+	httpClient    NodeL1Client
 	iscPackageID  iotago.PackageID
 	anchorAddress iotago.ObjectID
 	log           log.Logger
@@ -28,7 +28,7 @@ func NewChainFeed(
 	anchorAddress iotago.ObjectID,
 	log log.Logger,
 	socketURL string,
-	httpClient *Client,
+	httpClient NodeL1Client,
 ) (*ChainFeed, error) {
 	eventClient, err := selectEventClient(log, socketURL, iscPackageID, anchorAddress, httpClient)
 	if err != nil {

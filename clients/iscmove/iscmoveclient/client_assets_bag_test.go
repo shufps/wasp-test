@@ -311,7 +311,7 @@ func TestGetAssetsBagFromAnchorID(t *testing.T) {
 
 func borrowAnchorAssetsAndPlaceCoin(
 	t *testing.T, ctx context.Context,
-	client *iscmoveclient.Client,
+	client *iscmoveclient.SoloClient,
 	cryptolibSigner cryptolib.Signer,
 	anchorRef *iotago.ObjectRef,
 	coinRef *iotago.ObjectRef,
@@ -482,7 +482,7 @@ func TestGetAssetsBagFromRequestID(t *testing.T) {
 }
 
 func newAssetsBag(
-	client *iscmoveclient.Client,
+	client *iscmoveclient.SoloClient,
 	signer cryptolib.Signer,
 ) (*iotajsonrpc.IotaTransactionBlockResponse, error) {
 	return PTBTestWrapper(
@@ -500,7 +500,7 @@ func newAssetsBag(
 }
 
 func assetsBagPlaceCoinAmountWithGasCoin(
-	client *iscmoveclient.Client,
+	client *iscmoveclient.SoloClient,
 	signer cryptolib.Signer,
 	assetsBagRef *iotago.ObjectRef,
 	coinType iotajsonrpc.CoinType,
@@ -528,7 +528,7 @@ func assetsBagPlaceCoinAmountWithGasCoin(
 }
 
 func assetsBagPlaceCoinAmount(
-	client *iscmoveclient.Client,
+	client *iscmoveclient.SoloClient,
 	signer cryptolib.Signer,
 	assetsBagRef *iotago.ObjectRef,
 	coinRef *iotago.ObjectRef,

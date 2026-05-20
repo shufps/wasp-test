@@ -45,4 +45,4 @@ type L2Client interface {
 	) (*iscmoveclient.MoveCoin, error)
 }
 
-var _ L2Client = &iscmoveclient.Client{}
+var _ L2Client = &iscmoveclient.CLIClient{}

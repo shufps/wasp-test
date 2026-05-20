@@ -20,7 +20,7 @@ func TestMain(m *testing.M) {
 
 func buildDeployMintTestcoin(
 	t *testing.T,
-	client *iscmoveclient.Client,
+	client *iscmoveclient.SoloClient,
 	signer cryptolib.Signer,
 ) (
 	*iotago.ObjectRef,

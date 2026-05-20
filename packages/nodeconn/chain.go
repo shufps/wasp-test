@@ -56,7 +56,7 @@ func newNCChain(
 		*anchorAddress,
 		nodeConn.Logger,
 		grpcURL,
-		nodeConn.httpClient,
+		nodeConn.l1Client,
 	)
 	if err != nil {
 		return nil, err
@@ -92,12 +92,12 @@ func (ncc *ncChain) postTxLoop(ctx context.Context) {
 		}
 
 		// Dry-run before posting to catch failures before they cost gas.
-		if err := ncc.nodeConn.httpClient.SimulateTransaction(task.ctx, txBytes); err != nil {
+		if err := ncc.nodeConn.l1Client.SimulateTransaction(task.ctx, txBytes); err != nil {
 			return nil, fmt.Errorf("failed to dry-run Anchor transaction: %w", err)
 		}
 		ncc.LogDebug("successfully dry-run Anchor transaction")
 
-		if _, err := ncc.nodeConn.httpClient.ExecuteTransaction(task.ctx, txBytes, task.tx.Signatures); err != nil {
+		if _, err := ncc.nodeConn.l1Client.ExecuteTransaction(task.ctx, txBytes, task.tx.Signatures); err != nil {
 			ncc.LogErrorf("POSTING TX error: %v\n", err)
 			return nil, err
 		}
@@ -105,7 +105,7 @@ func (ncc *ncChain) postTxLoop(ctx context.Context) {
 
 		// The anchor address equals the chain ID — no need to parse it from tx effects.
 		anchorAddress := ncc.chainID.AsObjectID()
-		anchor, err := ncc.nodeConn.httpClient.GetAnchorFromObjectID(ctx, &anchorAddress)
+		anchor, err := ncc.nodeConn.l1Client.GetAnchorFromObjectID(ctx, &anchorAddress)
 		if err != nil {
 			return nil, err
 		}

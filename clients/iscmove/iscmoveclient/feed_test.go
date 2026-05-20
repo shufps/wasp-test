@@ -8,6 +8,7 @@ import (
 
 	"github.com/iotaledger/wasp/clients/iota-go/iotaclient"
 	"github.com/iotaledger/wasp/clients/iota-go/iotaconn"
+	"github.com/iotaledger/wasp/clients/iota-go/iotagrpc"
 	"github.com/iotaledger/wasp/clients/iota-go/iotago"
 	testcommon "github.com/iotaledger/wasp/clients/iota-go/test_common"
 	"github.com/iotaledger/wasp/clients/iscmove"
@@ -38,14 +39,18 @@ func TestRequestsFeed(t *testing.T) {
 
 	log := testlogger.NewLogger(t)
 
-	httpClient := iscmoveclient.NewHTTPClient(iotaconn.AlphanetEndpointURL, "", iotaclient.WaitForEffectsEnabled)
+	grpcAddr := iotaconn.AlphanetGrpcEndpointURL[len("grpc://"):]
+	grpcClient, err := iotagrpc.NewClient(grpcAddr)
+	require.NoError(t, err)
+	nodeClient := iscmoveclient.NewGRPCClient(grpcClient)
+
 	chainFeed, err := iscmoveclient.NewChainFeed(
 		ctx,
 		l1starter.ISCPackageID(),
 		*anchor.ObjectID,
 		log,
 		iotaconn.AlphanetGrpcEndpointURL,
-		httpClient,
+		nodeClient,
 	)
 	require.NoError(t, err)
 	defer func() {

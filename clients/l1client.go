@@ -286,7 +286,7 @@ func (c *l1Client) DeployISCContracts(ctx context.Context, signer iotasigner.Sig
 }
 
 func (c *l1Client) L2() L2Client {
-	return iscmoveclient.NewClient(c.Client, c.Config.FaucetURL)
+	return iscmoveclient.NewCLIClient(c.Client, c.Config.FaucetURL)
 }
 
 func (c *l1Client) IotaClient() *iotaclient.Client {

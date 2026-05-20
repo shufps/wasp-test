@@ -24,20 +24,18 @@ func (env *Solo) L1Client() clients.L1Client {
 	}, iotaclient.WaitForEffectsEnabled)
 }
 
-func (env *Solo) ISCMoveClient() *iscmoveclient.Client {
-	c := iscmoveclient.NewHTTPClient(
+func (env *Solo) ISCMoveClient() *iscmoveclient.SoloClient {
+	httpClient := iscmoveclient.NewHTTPClient(
 		env.l1Config.IotaRPCURL,
 		env.l1Config.IotaFaucetURL,
 		l1starter.WaitUntilEffectsVisible,
 	)
+	var grpcClient *iotagrpc.Client
 	if env.l1Config.IotaGrpcURL != "" {
 		grpcAddr := env.l1Config.IotaGrpcURL[len("grpc://"):]
-		grpcClient, err := iotagrpc.NewClient(grpcAddr)
-		if err == nil {
-			c.WithGRPCClient(grpcClient)
-		}
+		grpcClient, _ = iotagrpc.NewClient(grpcAddr)
 	}
-	return c
+	return iscmoveclient.NewSoloClient(httpClient, grpcClient)
 }
 
 func (env *Solo) NewKeyPairFromIndex(index int) *cryptolib.KeyPair {

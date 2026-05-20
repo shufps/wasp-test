@@ -30,31 +30,59 @@ Entirely new package — did not exist before.
 
 ---
 
-## 2. ISCMove Client: gRPC Overrides (`clients/iscmove/iscmoveclient/`)
+## 2. ISCMove Client: Three-way Split (`clients/iscmove/iscmoveclient/`)
 
-### New Files
+The monolithic `Client` struct has been split into three clearly separated types:
 
-**`client_grpc.go`** (282 lines)
-- Methods on `Client` shadow the identically-named methods on the embedded `*iotaclient.Client`, routing all calls directly to gRPC. No JSON-RPC fallback.
-- Overridden methods: `GetObject`, `GetOwnedObjects`, `GetCoins`, `GetAllCoins`, `GetCoinObjsForTargetAmount`, `GetCoinMetadata`, `GetReferenceGasPrice`, `GetAnchorFromObjectID`, `GetPastAnchorFromObjectID`, `SimulateTransaction`, `ExecuteTransaction`.
+### `GRPCClient` (`grpc_client.go`)
 
-**`event_listener.go`** (205 lines)
+Pure gRPC client — **no `*iotaclient.Client` embedding**, no JSON-RPC fallback.
+Used exclusively by the wasp node via `nodeconn`.
+
+- Implements `NodeL1Client` interface (verified by `var _ NodeL1Client = &GRPCClient{}`)
+- Methods: `GetObject`, `GetOwnedObjects`, `GetCoins`, `GetAllCoins`, `GetCoinObjsForTargetAmount`, `GetCoinMetadata`, `GetReferenceGasPrice`, `GetAnchorFromObjectID`, `GetPastAnchorFromObjectID`, `GetAssetsBagWithBalances`, `GetCoin`, `GetRequestFromObjectID`, `GetRequestsSorted`, `GetRequests`, `SimulateTransaction`, `ExecuteTransaction`, `Health`
+
+### `CLIClient` (`client.go`)
+
+HTTP/JSON-RPC only — embeds `*iotaclient.Client`, **no gRPC field**.
+Used by wasp-cli and apilib.
+
+- `GetAssetsBagWithBalances` and `GetPastAnchorFromObjectID` are panic stubs (not supported without gRPC)
+- Constructor: `NewCLIClient(client, faucetURL)` / `NewHTTPClient(apiURL, faucetURL, waitParams)`
+
+### `SoloClient` (`client_solo.go`)
+
+Extends `CLIClient` with a `*iotagrpc.Client` for operations that require gRPC.
+Used by solo and integration tests.
+
+- Embeds `*CLIClient` + `grpcClient *iotagrpc.Client`
+- Overrides: `GetAssetsBagWithBalances`, `GetPastAnchorFromObjectID` (gRPC-backed)
+- Overrides `GetRequestFromObjectID`, `GetRequestsSorted`, `GetRequests`, `ReceiveRequestsAndTransition` to pass `*SoloClient` as `iscFetcher` (required due to Go's lack of virtual dispatch on embedded methods)
+- Constructor: `NewSoloClient(httpClient, grpcClient)`
+
+### Shared Helpers (`client_shared.go`)
+
+Package-level helpers accepting the `iscFetcher` interface eliminate code duplication between `GRPCClient` and `SoloClient`:
+`getAnchorFromObjectID`, `getCoin`, `getRequestFromObjectID`, `parseRequestAndFetchAssetsBag`, `pullRequests`, `getRequestsSorted`, `getRequests`
+
+The shared `receiveRequestsAndTransitionWith(ctx, fetcher, ptbSigner, req)` helper is used by both `CLIClient.ReceiveRequestsAndTransition` and `SoloClient.ReceiveRequestsAndTransition`.
+
+### Interface (`client_interface.go`)
+
+`NodeL1Client` interface — the contract between `nodeconn` and the L1 client layer:
+`Health`, `GetObject`, `GetAnchorFromObjectID`, `GetRequestFromObjectID`, `GetRequestsSorted`, `ExecuteTransaction`, `SimulateTransaction`
+
+### Other New/Modified Files
+
+**`event_listener.go`**
 - `EventListener` interface with gRPC-only implementation (`GRpcClientWrapper`) using `StreamCheckpoints`.
 - `selectEventClient()`: validates `grpc://` scheme and creates the wrapper.
 - Channels: `SubscribeEvents() (<-chan iscmove.RequestEvent)` and `SubscribeAnchorUpdates() (<-chan *iscmove.AnchorWithRef)`.
+- Uses `NodeL1Client` instead of `*Client` for the `httpClient` field.
 
-**`client_assets_bag_grpc.go`** (100 lines)
-- gRPC variant of `GetAssetsBagWithBalances`.
-
-### Modified Files
-
-**`client.go`**: `WithGRPCClient(grpcClient)` method added; `grpcClient` field added to `Client` struct.
-
-**`client_anchor.go`**: Removed `ReceiveRequestsAndTransition` and other indexer-specific methods (~59 lines removed).
-
-**`feed.go`**: Major refactor:
+**`feed.go`**
 - `wsClient *Client` → `eventClient EventListener` (transport abstraction)
-- `NewChainFeed` now takes `socketURL string` + `httpClient *Client` instead of `wsURL` + `httpURL`
+- `NewChainFeed` now takes `grpcURL string` + `httpClient NodeL1Client`
 - `subscribeToNewRequests`: WebSocket reconnect loop removed, replaced by a single `eventClient.SubscribeEvents(ctx)` call
 - `consumeRequestEvents`: now receives `<-chan iscmove.RequestEvent` instead of `<-chan *iotajsonrpc.IotaEvent` with manual BCS unmarshalling
 - Client-side filtering by `anchorID` (gRPC cannot filter by event field value)
@@ -65,12 +93,14 @@ Entirely new package — did not exist before.
 
 ### `nodeconn.go`
 - `wsURL string` + `httpURL string` → **`grpcURL string`** (single endpoint)
-- `New(...)`: now creates `iotagrpc.NewClient(grpcAddr)` and calls `httpClient.WithGRPCClient(grpcClient)`
-- `WaitUntilInitiallySynced`: `GetLatestIotaSystemState()` → `httpClient.Health(ctx)`
-- `AttachChain`: passes `grpcURL` instead of `wsURL`+`httpURL`
+- `New(...)`: now creates `iotagrpc.NewClient(grpcAddr)` and `iscmoveclient.NewGRPCClient(grpcClient)` — pure gRPC, no HTTP client
+- `l1Client *iscmoveclient.GRPCClient` (was `httpClient *iscmoveclient.Client`)
+- `WaitUntilInitiallySynced`: `GetLatestIotaSystemState()` → `l1Client.Health(ctx)`
+- `AttachChain`: passes `grpcURL` + `l1Client` (typed as `NodeL1Client`) instead of `wsURL`+`httpURL`
 
 ### `chain.go`
 - `newNCChain`: signature `wsURL, httpURL string` → `grpcURL string`
+- `httpClient` → `l1Client` (renamed to reflect that it's a pure gRPC client)
 - `postTxLoop` simplified:
   - `DryRunTransaction()` → `SimulateTransaction()` (no more manual nil/IsFailed checks)
   - `ExecuteTransactionBlock(ExecuteTransactionBlockRequest{...})` → `ExecuteTransaction(ctx, txBytes, signatures)`
@@ -113,11 +143,13 @@ Entirely new package — did not exist before.
 
 ## 6. Solo / Tests
 
-- `packages/solo/solo.go` + `solofun.go`: minor adjustments for gRPC compatibility
-- `packages/testutil/l1starter/remote_node.go`: new file (25 lines) for remote node support in test setup
+- `packages/solo/solofun.go`: `ISCMoveClient()` now returns `*iscmoveclient.SoloClient` (was `*Client`); constructs `CLIClient` + optional `GRPCClient` and combines them via `NewSoloClient`
+- `clients/iscmove/iscmoveclient/iscmoveclienttest/setup.go`: `NewHTTPClient()` now returns `*iscmoveclient.SoloClient`; picks up gRPC URL from `l1starter.Instance().GrpcURL()`
+- `packages/testutil/l1starter/remote_node.go`: new file for remote node support in test setup
 - `packages/testutil/l1starter/local_node.go`: `GrpcURL()` method added
-- `clients/iscmove/iscmoveclient/iscmoveclienttest/setup.go`: cleanup (16 lines removed)
-- `packages/origin/origin.go`: minor additions
+- `clients/l2client.go`: compile-time assertion updated to `var _ L2Client = &iscmoveclient.CLIClient{}`
+- `clients/l1client.go`: `L2()` method uses `NewCLIClient` (was `NewClient`)
+- All test files updated: `*iscmoveclient.Client` → `*iscmoveclient.SoloClient`
 
 ---
 
@@ -138,10 +170,14 @@ Entirely new package — did not exist before.
 | Config keys | `httpURL` + `websocketURL` | `grpcURL` |
 | Default port | 9000 | 50051 |
 | `nodeconn.New()` signature | `wsURL, httpURL string` | `grpcURL string` |
-| `NewChainFeed()` signature | `wsURL, httpURL string` | `grpcURL string, httpClient *Client` |
+| `NewChainFeed()` signature | `wsURL, httpURL string` | `grpcURL string, httpClient NodeL1Client` |
 | Health check | `GetLatestIotaSystemState()` | `Health()` |
 | TX execution | `ExecuteTransactionBlock(request)` | `ExecuteTransaction(ctx, bytes, sigs)` |
 | Dry-run | `DryRunTransaction()` + manual effect check | `SimulateTransaction()` |
+| ISCMove client type (node) | `*Client` (HTTP+gRPC) | `*GRPCClient` (pure gRPC) |
+| ISCMove client type (cli/apilib) | `*Client` | `*CLIClient` (HTTP only) |
+| ISCMove client type (solo/tests) | `*Client` | `*SoloClient` (HTTP + gRPC) |
+| `NewClient(client, faucetURL)` | — | `NewCLIClient` / `NewSoloClient` |
 
 ---
 

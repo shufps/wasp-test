@@ -41,7 +41,7 @@ func selectEventClient(
 	grpcURL string,
 	iscPackageID iotago.PackageID,
 	anchorID iotago.ObjectID,
-	httpClient *Client,
+	httpClient NodeL1Client,
 ) (EventListener, error) {
 	if len(grpcURL) < 7 || grpcURL[:7] != "grpc://" {
 		return nil, fmt.Errorf("unsupported URL: %q (must start with grpc://)", grpcURL)
@@ -57,7 +57,7 @@ type GRpcClientWrapper struct {
 	grpcAddress   string
 	iscPackageID  iotago.PackageID
 	anchorAddress iotago.ObjectID
-	httpClient    *Client
+	httpClient    NodeL1Client
 	log           log.Logger
 	wg            sync.WaitGroup
 }
@@ -67,7 +67,7 @@ func NewGRpcClientWrapper(
 	grpcAddress string,
 	iscPackageID iotago.PackageID,
 	anchorAddress iotago.ObjectID,
-	httpClient *Client,
+	httpClient NodeL1Client,
 ) EventListener {
 	return &GRpcClientWrapper{
 		grpcAddress:   grpcAddress,

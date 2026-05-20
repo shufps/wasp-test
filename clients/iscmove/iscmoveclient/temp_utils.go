@@ -16,11 +16,11 @@ import (
 // As we separate both libraries, we can't simply reference this function
 // For now it's placed here, but should be removed soon.
 
-func (c *Client) MustWaitForNextVersionForTesting(ctx context.Context, timeout time.Duration, logger log.Logger, currentRef *iotago.ObjectRef, cb func()) *iotago.ObjectRef {
+func (c *CLIClient) MustWaitForNextVersionForTesting(ctx context.Context, timeout time.Duration, logger log.Logger, currentRef *iotago.ObjectRef, cb func()) *iotago.ObjectRef {
 	return lo.Must(c.WaitForNextVersionForTesting(ctx, timeout, logger, currentRef, cb))
 }
 
-func (c *Client) WaitForNextVersionForTesting(ctx context.Context, timeout time.Duration, logger log.Logger, currentRef *iotago.ObjectRef, cb func()) (*iotago.ObjectRef, error) {
+func (c *CLIClient) WaitForNextVersionForTesting(ctx context.Context, timeout time.Duration, logger log.Logger, currentRef *iotago.ObjectRef, cb func()) (*iotago.ObjectRef, error) {
 	// Some 'sugar' to make dynamic refs handling easier (where refs can be nil or set depending on state)
 	if currentRef == nil {
 		cb()

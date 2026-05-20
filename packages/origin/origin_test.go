@@ -206,7 +206,7 @@ func TestMismatchOriginCommitment(t *testing.T) {
 
 func startNewChain(
 	t *testing.T,
-	client *iscmoveclient.Client,
+	client *iscmoveclient.SoloClient,
 	req *iscmoveclient.StartNewChainRequest,
 ) (*iotajsonrpc.IotaTransactionBlockResponse, *iscmove.RefWithObject[iscmove.Anchor], error) {
 	ptb := iotago.NewProgrammableTransactionBuilder()
