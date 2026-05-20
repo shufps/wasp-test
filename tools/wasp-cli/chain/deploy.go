@@ -18,6 +18,7 @@ import (
 	"github.com/iotaledger/hive.go/kvstore/mapdb"
 	"github.com/iotaledger/wasp/clients"
 	"github.com/iotaledger/wasp/clients/iota-go/iotaclient"
+	"github.com/iotaledger/wasp/clients/iota-go/iotagrpc"
 	"github.com/iotaledger/wasp/clients/iota-go/iotago"
 	"github.com/iotaledger/wasp/clients/iota-go/iotajsonrpc"
 	"github.com/iotaledger/wasp/packages/apilib"
@@ -170,7 +171,12 @@ func initDeployCmd() *cobra.Command {
 
 			committeeAddr := doDKG(ctx, node, peers, quorum)
 
-			l1Params, err := parameters.FetchLatest(context.Background(), l1Client.IotaClient())
+			apiURL := config.L1APIAddress()
+			grpcAddr := strings.TrimPrefix(strings.TrimPrefix(apiURL, "https://"), "http://")
+			grpcClient, grpcErr := iotagrpc.NewClient(grpcAddr)
+			log.Check(grpcErr)
+			defer grpcClient.Close()
+			l1Params, err := parameters.FetchLatestGRPC(context.Background(), grpcClient)
 			log.Check(err)
 
 			gasCoin, err := CreateAndSendGasCoin(ctx, l1Client, kp, committeeAddr.AsIotaAddress(), l1Params)

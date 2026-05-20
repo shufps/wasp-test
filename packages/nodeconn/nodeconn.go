@@ -89,7 +89,7 @@ func New(
 	}
 	httpClient.WithGRPCClient(grpcClient)
 
-	paramsFetcher := parameters.NewL1ParamsFetcherWithGRPC(httpClient.Client, grpcClient, log)
+	paramsFetcher := parameters.NewL1ParamsFetcher(grpcClient, log)
 
 	return &nodeConnection{
 		Logger:              log,

@@ -4,10 +4,9 @@
 package iscmoveclient
 
 // This file provides methods on Client that shadow the identically-named
-// methods on the embedded *iotaclient.Client.  When a gRPC client is
-// attached (via WithGRPCClient), these methods route to gRPC StateService
-// instead of the indexer-backed iotax_* JSON-RPC calls.  When no gRPC
-// client is present they fall through to the JSON-RPC implementation.
+// methods on the embedded *iotaclient.Client, routing all calls to the
+// gRPC StateService instead of the indexer-backed iotax_* JSON-RPC calls.
+// gRPC is now mandatory; Client.grpcClient must always be set.
 
 import (
 	"context"
@@ -22,50 +21,43 @@ import (
 	"github.com/iotaledger/wasp/clients/iscmove"
 )
 
-// GetObject fetches a single object by ID, routing to gRPC when available.
+// GetObject fetches a single object by ID via gRPC.
 // Constructs a synthetic IotaObjectResponse from the decoded VersionedObject BCS.
 func (c *Client) GetObject(ctx context.Context, req iotaclient.GetObjectRequest) (*iotajsonrpc.IotaObjectResponse, error) {
-	if c.grpcClient != nil {
-		od, err := c.grpcClient.GetObjectBCS(ctx, req.ObjectID, nil)
-		if err != nil {
-			return nil, err
-		}
-		return objectDataToResponse(od), nil
+	od, err := c.grpcClient.GetObjectBCS(ctx, req.ObjectID, nil)
+	if err != nil {
+		return nil, err
 	}
-	return c.Client.GetObject(ctx, req)
+	return objectDataToResponse(od), nil
 }
 
-// GetOwnedObjects returns a page of objects owned by the given address,
-// routing to gRPC when available.
+// GetOwnedObjects returns a page of objects owned by the given address via gRPC.
 func (c *Client) GetOwnedObjects(ctx context.Context, req iotaclient.GetOwnedObjectsRequest) (*iotajsonrpc.ObjectsPage, error) {
-	if c.grpcClient != nil {
-		objectType := ""
-		if req.Query != nil && req.Query.Filter != nil && req.Query.Filter.StructType != nil {
-			st := req.Query.Filter.StructType
-			objectType = fmt.Sprintf("0x%x::%s::%s", st.Address[:], st.Module, st.Name)
-		}
-		var cursor []byte
-		if req.Cursor != nil {
-			cursor = req.Cursor[:]
-		}
-		var limit uint32
-		if req.Limit != nil {
-			limit = uint32(*req.Limit)
-		}
-		page, err := c.grpcClient.ListOwnedObjectsPage(ctx, (*iotago.Address)(req.Address), objectType, cursor, limit)
-		if err != nil {
-			return nil, err
-		}
-		result := &iotajsonrpc.ObjectsPage{
-			HasNextPage: page.HasNextPage,
-			NextCursor:  page.NextCursor,
-		}
-		for _, od := range page.Objects {
-			result.Data = append(result.Data, *objectDataToResponse(od))
-		}
-		return result, nil
+	objectType := ""
+	if req.Query != nil && req.Query.Filter != nil && req.Query.Filter.StructType != nil {
+		st := req.Query.Filter.StructType
+		objectType = fmt.Sprintf("0x%x::%s::%s", st.Address[:], st.Module, st.Name)
 	}
-	return c.Client.GetOwnedObjects(ctx, req)
+	var cursor []byte
+	if req.Cursor != nil {
+		cursor = req.Cursor[:]
+	}
+	var limit uint32
+	if req.Limit != nil {
+		limit = uint32(*req.Limit)
+	}
+	page, err := c.grpcClient.ListOwnedObjectsPage(ctx, (*iotago.Address)(req.Address), objectType, cursor, limit)
+	if err != nil {
+		return nil, err
+	}
+	result := &iotajsonrpc.ObjectsPage{
+		HasNextPage: page.HasNextPage,
+		NextCursor:  page.NextCursor,
+	}
+	for _, od := range page.Objects {
+		result.Data = append(result.Data, *objectDataToResponse(od))
+	}
+	return result, nil
 }
 
 // objectDataToResponse builds a synthetic IotaObjectResponse from a gRPC ObjectData.
@@ -94,130 +86,65 @@ func objectDataToResponse(od *iotagrpc.ObjectData) *iotajsonrpc.IotaObjectRespon
 	return &iotajsonrpc.IotaObjectResponse{Data: data}
 }
 
-// GetCoins returns up to req.Limit coin objects of req.CoinType owned by
-// req.Owner, starting after req.Cursor.  Routes to gRPC when available.
+// GetCoins returns up to req.Limit coin objects of req.CoinType owned by req.Owner via gRPC.
 func (c *Client) GetCoins(ctx context.Context, req iotaclient.GetCoinsRequest) (*iotajsonrpc.CoinPage, error) {
-	if c.grpcClient != nil {
-		coinType := iotajsonrpc.IotaCoinType.String()
-		if req.CoinType != nil && *req.CoinType != "" {
-			coinType = *req.CoinType
-		}
-		var cursor []byte
-		if req.Cursor != nil {
-			cursor = req.Cursor[:]
-		}
-		return c.grpcClient.GetCoins(ctx, req.Owner, coinType, cursor, uint32(req.Limit))
+	coinType := iotajsonrpc.IotaCoinType.String()
+	if req.CoinType != nil && *req.CoinType != "" {
+		coinType = *req.CoinType
 	}
-	return c.Client.GetCoins(ctx, req)
+	var cursor []byte
+	if req.Cursor != nil {
+		cursor = req.Cursor[:]
+	}
+	return c.grpcClient.GetCoins(ctx, req.Owner, coinType, cursor, uint32(req.Limit))
 }
 
-// GetAllCoins returns all coin objects owned by req.Owner (paginated).
-// Routes to gRPC when available.
+// GetAllCoins returns all coin objects owned by req.Owner (paginated) via gRPC.
 func (c *Client) GetAllCoins(ctx context.Context, req iotaclient.GetAllCoinsRequest) (*iotajsonrpc.CoinPage, error) {
-	if c.grpcClient != nil {
-		var cursor []byte
-		if req.Cursor != nil {
-			cursor = req.Cursor[:]
-		}
-		return c.grpcClient.GetAllCoins(ctx, req.Owner, cursor, uint32(req.Limit))
+	var cursor []byte
+	if req.Cursor != nil {
+		cursor = req.Cursor[:]
 	}
-	return c.Client.GetAllCoins(ctx, req)
+	return c.grpcClient.GetAllCoins(ctx, req.Owner, cursor, uint32(req.Limit))
 }
 
-// GetCoinObjsForTargetAmount fetches IOTA coins to cover targetAmount+gasAmount.
-// Routes to gRPC when available.
+// GetCoinObjsForTargetAmount fetches IOTA coins to cover targetAmount+gasAmount via gRPC.
 func (c *Client) GetCoinObjsForTargetAmount(
 	ctx context.Context,
 	address *iotago.Address,
 	targetAmount uint64,
 	gasAmount uint64,
 ) (iotajsonrpc.Coins, error) {
-	if c.grpcClient != nil {
-		return c.grpcClient.GetCoinObjsForTargetAmount(ctx, address, targetAmount, gasAmount)
-	}
-	return c.Client.GetCoinObjsForTargetAmount(ctx, address, targetAmount, gasAmount)
+	return c.grpcClient.GetCoinObjsForTargetAmount(ctx, address, targetAmount, gasAmount)
 }
 
-// GetCoinMetadata returns metadata for coinType.
-// Routes to gRPC when available.
+// GetCoinMetadata returns metadata for coinType via gRPC.
 func (c *Client) GetCoinMetadata(ctx context.Context, coinType string) (*iotajsonrpc.IotaCoinMetadata, error) {
-	if c.grpcClient != nil {
-		return c.grpcClient.GetCoinMetadata(ctx, coinType)
-	}
-	return c.Client.GetCoinMetadata(ctx, coinType)
+	return c.grpcClient.GetCoinMetadata(ctx, coinType)
 }
 
-// GetReferenceGasPrice returns the current reference gas price.
-// Routes to gRPC when available.
+// GetReferenceGasPrice returns the current reference gas price via gRPC.
 func (c *Client) GetReferenceGasPrice(ctx context.Context) (*iotajsonrpc.BigInt, error) {
-	if c.grpcClient != nil {
-		return c.grpcClient.GetReferenceGasPrice(ctx)
-	}
-	return c.Client.GetReferenceGasPrice(ctx)
+	return c.grpcClient.GetReferenceGasPrice(ctx)
 }
 
-// GetAnchorFromObjectID fetches the anchor, routing to gRPC when available.
+// GetAnchorFromObjectID fetches the anchor via gRPC.
 // This shadows the same method in client_anchor.go.
 func (c *Client) GetAnchorFromObjectID(
 	ctx context.Context,
 	anchorObjectID *iotago.ObjectID,
 ) (*iscmove.AnchorWithRef, error) {
-	if c.grpcClient != nil {
-		return c.getAnchorFromObjectIDGRPC(ctx, anchorObjectID, nil)
-	}
-	getObjectResponse, err := c.Client.GetObject(ctx, iotaclient.GetObjectRequest{
-		ObjectID: anchorObjectID,
-		Options:  &iotajsonrpc.IotaObjectDataOptions{ShowBcs: true, ShowOwner: true},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to get anchor content: %w", err)
-	}
-	if getObjectResponse.Error != nil {
-		return nil, fmt.Errorf("failed to get anchor content: %s", getObjectResponse.Error.Data.String())
-	}
-	return decodeAnchorBCS(
-		getObjectResponse.Data.Bcs.Data.MoveObject.BcsBytes,
-		getObjectResponse.Data.Ref(),
-		getObjectResponse.Data.Owner.AddressOwner,
-	)
+	return c.getAnchorFromObjectIDGRPC(ctx, anchorObjectID, nil)
 }
 
-// GetPastAnchorFromObjectID fetches the anchor at a specific version,
-// routing to gRPC when available.
+// GetPastAnchorFromObjectID fetches the anchor at a specific version via gRPC.
 // This shadows the same method in client_anchor.go.
 func (c *Client) GetPastAnchorFromObjectID(
 	ctx context.Context,
 	anchorObjectID *iotago.ObjectID,
 	version uint64,
 ) (*iscmove.AnchorWithRef, error) {
-	if c.grpcClient != nil {
-		return c.getAnchorFromObjectIDGRPC(ctx, anchorObjectID, &version)
-	}
-	getObjectResponse, err := c.TryGetPastObject(ctx, iotaclient.TryGetPastObjectRequest{
-		ObjectID: anchorObjectID,
-		Version:  version,
-		Options:  &iotajsonrpc.IotaObjectDataOptions{ShowBcs: true, ShowOwner: true},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to get anchor content: %w", err)
-	}
-	if getObjectResponse.Data.ObjectDeleted != nil {
-		return nil, fmt.Errorf("failed to get anchor content: deleted")
-	}
-	if getObjectResponse.Data.ObjectNotExists != nil {
-		return nil, fmt.Errorf("failed to get anchor content: object does not exist")
-	}
-	if getObjectResponse.Data.VersionNotFound != nil {
-		return nil, fmt.Errorf("failed to get anchor content: version not found")
-	}
-	if getObjectResponse.Data.VersionTooHigh != nil {
-		return nil, fmt.Errorf("failed to get anchor content: version too high")
-	}
-	return decodeAnchorBCS(
-		getObjectResponse.Data.VersionFound.Bcs.Data.MoveObject.BcsBytes,
-		getObjectResponse.Data.VersionFound.Ref(),
-		getObjectResponse.Data.VersionFound.Owner.AddressOwner,
-	)
+	return c.getAnchorFromObjectIDGRPC(ctx, anchorObjectID, &version)
 }
 
 func (c *Client) getAnchorFromObjectIDGRPC(
@@ -237,46 +164,16 @@ func (c *Client) getAnchorFromObjectIDGRPC(
 	return decodeAnchorBCS(iotago.Base64Data(od.Contents), ref, od.Owner)
 }
 
-// SimulateTransaction dry-runs a transaction via gRPC when available,
-// falling back to JSON-RPC DryRunTransaction.
+// SimulateTransaction dry-runs a transaction via gRPC.
 func (c *Client) SimulateTransaction(ctx context.Context, txBytes []byte) error {
-	if c.grpcClient != nil {
-		return c.grpcClient.SimulateTransaction(ctx, txBytes)
-	}
-	res, err := c.Client.DryRunTransaction(ctx, txBytes)
-	if err != nil {
-		return err
-	}
-	if res.Effects.Data.IsFailed() {
-		return fmt.Errorf("dry-run failed: %s", res.Effects.Data.V1.Status.Error)
-	}
-	return nil
+	return c.grpcClient.SimulateTransaction(ctx, txBytes)
 }
 
-// ExecuteTransaction submits a signed transaction via gRPC when available,
-// falling back to JSON-RPC ExecuteTransactionBlock.
+// ExecuteTransaction submits a signed transaction via gRPC.
 func (c *Client) ExecuteTransaction(ctx context.Context, txBytes []byte, signatures []*iotasigner.Signature) (string, error) {
-	if c.grpcClient != nil {
-		sigBytes := make([][]byte, len(signatures))
-		for i, sig := range signatures {
-			sigBytes[i] = sig.Bytes()
-		}
-		return c.grpcClient.ExecuteTransaction(ctx, txBytes, sigBytes)
+	sigBytes := make([][]byte, len(signatures))
+	for i, sig := range signatures {
+		sigBytes[i] = sig.Bytes()
 	}
-	res, err := c.Client.ExecuteTransactionBlock(ctx, iotaclient.ExecuteTransactionBlockRequest{
-		TxDataBytes: txBytes,
-		Signatures:  signatures,
-		Options: &iotajsonrpc.IotaTransactionBlockResponseOptions{
-			ShowObjectChanges: true,
-			ShowEffects:       true,
-		},
-		RequestType: iotajsonrpc.TxnRequestTypeWaitForLocalExecution,
-	})
-	if err != nil {
-		return "", err
-	}
-	if !res.Effects.Data.IsSuccess() {
-		return "", fmt.Errorf("error executing tx: %s Digest: %s", res.Effects.Data.V1.Status.Error, res.Digest)
-	}
-	return res.Digest.String(), nil
+	return c.grpcClient.ExecuteTransaction(ctx, txBytes, sigBytes)
 }

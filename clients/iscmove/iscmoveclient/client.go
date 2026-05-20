@@ -19,7 +19,7 @@ import (
 type Client struct {
 	*iotaclient.Client
 	faucetURL  string
-	grpcClient *iotagrpc.Client // optional; if set, replaces indexer-backed iotax_* calls
+	grpcClient *iotagrpc.Client
 }
 
 func NewClient(client *iotaclient.Client, faucetURL string) *Client {
@@ -64,11 +64,7 @@ func (c *Client) RequestFunds(ctx context.Context, address cryptolib.Address) er
 }
 
 func (c *Client) Health(ctx context.Context) error {
-	if c.grpcClient != nil {
-		_, err := c.grpcClient.GetEpochInfo(ctx)
-		return err
-	}
-	_, err := c.GetLatestIotaSystemState(ctx)
+	_, err := c.grpcClient.GetEpochInfo(ctx)
 	return err
 }
 

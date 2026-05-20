@@ -163,17 +163,12 @@ func New(t Context, initOptions ...*InitOptions) *Solo {
 	ctx, cancelCtx := context.WithCancel(context.Background())
 	t.Cleanup(cancelCtx)
 
-	var l1ParamsFetcher parameters.L1ParamsFetcher
-	if opt.L1Config.IotaGrpcURL != "" {
-		grpcAddr := opt.L1Config.IotaGrpcURL[len("grpc://"):]
-		grpcClient, err := iotagrpc.NewClient(grpcAddr)
-		if err != nil {
-			panic(fmt.Sprintf("solo: failed to create gRPC client: %v", err))
-		}
-		l1ParamsFetcher = parameters.NewL1ParamsFetcherWithGRPC(l1starter.Instance().L1Client().IotaClient(), grpcClient, opt.Log)
-	} else {
-		l1ParamsFetcher = parameters.NewL1ParamsFetcher(l1starter.Instance().L1Client().IotaClient(), opt.Log)
+	grpcAddr := opt.L1Config.IotaGrpcURL[len("grpc://"):]
+	grpcClient, err := iotagrpc.NewClient(grpcAddr)
+	if err != nil {
+		panic(fmt.Sprintf("solo: failed to create gRPC client: %v", err))
 	}
+	l1ParamsFetcher := parameters.NewL1ParamsFetcher(grpcClient, opt.Log)
 
 	ret := &Solo{
 		T:                    t,
