@@ -152,41 +152,6 @@ Entirely new package — did not exist before.
 
 ## Risk Analysis: Production Deployment (EVM)
 
-### 🔴 Critical
-
-#### 1. `ExecuteTransaction` returns an empty TX digest
-**File:** [clients/iota-go/iotagrpc/grpc_client.go:517](clients/iota-go/iotagrpc/grpc_client.go#L517)
-
-```go
-return "", nil  // ← digest missing!
-```
-
-The gRPC path only reads `effects` from the response (`ReadMask: []string{"effects"}`), which
-contains no digest information. The function always returns `""`.
-
-- `nodeconn/chain.go:100` discards the return value with `_, err :=` — no issue there
-- Any caller that expects a digest (e.g. monitoring, logging, EVM chain tracing) will receive an empty string
-- The JSON-RPC fallback correctly returns `res.Digest.String()`
-
-**Recommendation:** Extend `ReadMask` to include `"digest"` and extract it from the response.
-
----
-
-#### 2. No TLS support — only `grpc://`, no `grpcs://`
-**File:** [clients/iota-go/iotagrpc/grpc_client.go:47](clients/iota-go/iotagrpc/grpc_client.go#L47)
-
-```go
-grpc.WithTransportCredentials(insecure.NewCredentials()),  // hard-coded
-```
-
-- The connection is **always unencrypted**, regardless of what is in the config
-- If the L1 node sits behind a TLS terminator or load balancer (common in prod), the handshake will fail or data will flow unencrypted
-- `grpcs://` URLs are explicitly rejected with an error (`must start with grpc://`)
-
-**Recommendation:** Add `grpcs://` support using `tls.NewClientTLSFromCert(nil, "")` when the scheme is `grpcs`.
-
----
-
 ### 🟡 Medium Risk
 
 #### 3. Checkpoint stream: no cursor persistence on reconnect
@@ -203,27 +168,7 @@ The `StreamClient` has reconnect logic with exponential backoff (5s → 30s). On
 
 ---
 
-#### 4. Anchor updates still fetched via HTTP (empty base URL)
-**File:** [packages/nodeconn/nodeconn.go:83](packages/nodeconn/nodeconn.go#L83)
-
-```go
-httpClient := iscmoveclient.NewHTTPClient("", "", iotaclient.WaitForEffectsEnabled)
-```
-
-`SubscribeAnchorUpdates` in `event_listener.go` calls `g.httpClient.GetAnchorFromObjectID(ctx, ...)`
-after every gRPC checkpoint event — nominally via HTTP. However, the HTTP client is created with
-an empty URL string.
-
-- This only works because `GetAnchorFromObjectID` in `client_grpc_overrides.go` routes to the gRPC
-  client when one is present (attached via `WithGRPCClient`)
-- If the gRPC client were **not** attached, every anchor fetch would go against `""` → error
-- The coupling is implicit and fragile
-
-**Recommendation:** Document this dependency explicitly, or replace the HTTP client entirely with the gRPC client for anchor fetches — the empty URL is a silent failure risk.
-
----
-
-#### 5. Client-side anchor filtering for events
+#### 4. Client-side anchor filtering for events
 **File:** [clients/iscmove/iscmoveclient/feed.go:94](clients/iscmove/iscmoveclient/feed.go#L94)
 
 ```go
@@ -235,7 +180,7 @@ happens only after receipt.
 
 - With many active chains on the same L1 node: **significantly more traffic and CPU** than necessary
 - Does not scale well when many Wasp nodes share the same gRPC node
-- Not a problem for a single-chain prod setup, but relevant for multi-chain deployments
+- **Not a concern in practice:** Wasp effectively supports only one chain per node. Multi-chain support was an earlier design goal but is no longer an active use case.
 
 ---
 
@@ -254,10 +199,9 @@ happens only after receipt.
 
 ### Recommended Actions Before Production Deployment
 
-1. **Fix `ExecuteTransaction` digest** — extend `ReadMask` to include `digest` and populate the return value
-2. **Clarify TLS requirements** — determine whether the prod L1 node requires `grpc://` (plaintext) or `grpcs://` (TLS)
-3. **Checkpoint resume** — nice-to-have, not a blocker for the initial deployment
-4. **Smoke test after deploy** — post a TX and verify the digest is logged, confirm anchor updates are received, test stream reconnect behavior
+1. **Smoke test after deploy** — post a TX and verify the digest is logged, confirm anchor updates are received, test stream reconnect behavior
+2. **Checkpoint resume** — nice-to-have, not a blocker for the initial deployment
+3. **TLS support** *(nice-to-have)* — gRPC is used internally (plaintext is fine), but `grpcs://` support can be added later if needed: scheme-based credential selection in `iotagrpc.NewClient`, `stream_client.go`, `event_listener.go`, and the URL validation in `nodeconn.go`
 
 ---
 
