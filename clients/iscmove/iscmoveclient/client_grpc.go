@@ -3,10 +3,8 @@
 
 package iscmoveclient
 
-// This file provides methods on Client that shadow the identically-named
-// methods on the embedded *iotaclient.Client, routing all calls to the
-// gRPC StateService instead of the indexer-backed iotax_* JSON-RPC calls.
-// gRPC is now mandatory; Client.grpcClient must always be set.
+// This file implements the L1 interface methods on Client using gRPC.
+// gRPC is the sole L1 transport; Client.grpcClient must always be set.
 
 import (
 	"context"

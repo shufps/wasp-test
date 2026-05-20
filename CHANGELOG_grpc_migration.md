@@ -34,16 +34,13 @@ Entirely new package — did not exist before.
 
 ### New Files
 
-**`client_grpc_overrides.go`** (282 lines)
-- Shadowing pattern: methods on `Client` shadow the identically-named methods on the embedded `*iotaclient.Client`.
-- When a gRPC client is attached (`WithGRPCClient`), these methods route to gRPC StateService.
-- Falls back to JSON-RPC when no gRPC client is present.
+**`client_grpc.go`** (282 lines)
+- Methods on `Client` shadow the identically-named methods on the embedded `*iotaclient.Client`, routing all calls directly to gRPC. No JSON-RPC fallback.
 - Overridden methods: `GetObject`, `GetOwnedObjects`, `GetCoins`, `GetAllCoins`, `GetCoinObjsForTargetAmount`, `GetCoinMetadata`, `GetReferenceGasPrice`, `GetAnchorFromObjectID`, `GetPastAnchorFromObjectID`, `SimulateTransaction`, `ExecuteTransaction`.
 
 **`event_listener.go`** (205 lines)
-- New `EventListener` interface abstracts over WebSocket and gRPC as event sources.
-- `GRpcClientWrapper`: gRPC-backed implementation of `EventListener` using `StreamCheckpoints`.
-- `selectEventClient()`: factory function that picks the right backend based on the URL scheme.
+- `EventListener` interface with gRPC-only implementation (`GRpcClientWrapper`) using `StreamCheckpoints`.
+- `selectEventClient()`: validates `grpc://` scheme and creates the wrapper.
 - Channels: `SubscribeEvents() (<-chan iscmove.RequestEvent)` and `SubscribeAnchorUpdates() (<-chan *iscmove.AnchorWithRef)`.
 
 **`client_assets_bag_grpc.go`** (100 lines)
@@ -83,10 +80,8 @@ Entirely new package — did not exist before.
 
 ## 4. L1 Parameters Fetcher (`packages/parameters/fetcher.go`)
 
-- `NewL1ParamsFetcherWithGRPC(client, grpcClient, log)` — new constructor variant
-- `l1ParamsFetcher` has an optional `grpcClient *iotagrpc.Client` field
-- `GetOrFetchLatest`: if `grpcClient != nil` → `FetchLatestGRPC(ctx, grpcClient)`, otherwise JSON-RPC
-- `FetchLatestGRPC` — new function for gRPC-backed system state fetching
+- `NewL1ParamsFetcher(grpcClient, log)` — takes only a gRPC client, no JSON-RPC fallback
+- `FetchLatestGRPC` — fetches system state via gRPC (epoch info, coin metadata, total supply)
 - Improved logging on fetch (Epoch, ProtocolVersion, ReferenceGasPrice, etc.)
 
 ---
@@ -143,7 +138,7 @@ Entirely new package — did not exist before.
 | Config keys | `httpURL` + `websocketURL` | `grpcURL` |
 | Default port | 9000 | 50051 |
 | `nodeconn.New()` signature | `wsURL, httpURL string` | `grpcURL string` |
-| `NewChainFeed()` signature | `wsURL, httpURL string` | `socketURL string, httpClient *Client` |
+| `NewChainFeed()` signature | `wsURL, httpURL string` | `grpcURL string, httpClient *Client` |
 | Health check | `GetLatestIotaSystemState()` | `Health()` |
 | TX execution | `ExecuteTransactionBlock(request)` | `ExecuteTransaction(ctx, bytes, sigs)` |
 | Dry-run | `DryRunTransaction()` + manual effect check | `SimulateTransaction()` |
@@ -192,7 +187,7 @@ happens only after receipt.
 | gRPC connection keepalive | Configured (30s/10s) |
 | gRPC URL validation | Startup error on wrong format |
 | Dry-run before TX | Preserved via `SimulateTransaction()` |
-| JSON-RPC fallback | All override methods fall back when no gRPC client is present |
+| JSON-RPC / WebSocket removed | All L1 communication is exclusively via gRPC |
 | TX execution error handling | `GetError()` from gRPC response is correctly checked |
 
 ---
