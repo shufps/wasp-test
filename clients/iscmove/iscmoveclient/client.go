@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/iotaledger/hive.go/log"
-
 	bcs "github.com/iotaledger/bcs-go"
 	"github.com/iotaledger/wasp/clients/iota-go/iotaclient"
 	"github.com/iotaledger/wasp/clients/iota-go/iotago"
@@ -29,8 +27,14 @@ func NewClient(client *iotaclient.Client, faucetURL string) *Client {
 	}
 }
 
-// WithGRPCClient attaches a gRPC client that replaces indexer-backed iotax_*
-// JSON-RPC calls (getCoins, getDynamicFields, getCoinMetadata, etc.).
+// NewGRPCClient creates a Client backed exclusively by gRPC — no HTTP base URL needed.
+func NewGRPCClient(grpcClient *iotagrpc.Client) *Client {
+	c := NewClient(iotaclient.NewHTTP("", iotaclient.WaitForEffectsEnabled), "")
+	c.grpcClient = grpcClient
+	return c
+}
+
+// WithGRPCClient attaches a gRPC client.
 func (c *Client) WithGRPCClient(grpc *iotagrpc.Client) *Client {
 	c.grpcClient = grpc
 	return c
@@ -43,18 +47,6 @@ func NewHTTPClient(apiURL, faucetURL string, waitUntilEffectsVisible *iotaclient
 	)
 }
 
-func NewWebsocketClient(
-	ctx context.Context,
-	wsURL, faucetURL string,
-	waitUntilEffectsVisible *iotaclient.WaitParams,
-	log log.Logger,
-) (*Client, error) {
-	ws, err := iotaclient.NewWebsocket(ctx, wsURL, waitUntilEffectsVisible, log)
-	if err != nil {
-		return nil, err
-	}
-	return NewClient(ws, faucetURL), nil
-}
 
 func (c *Client) RequestFunds(ctx context.Context, address cryptolib.Address) error {
 	if c.faucetURL == "" {

@@ -81,13 +81,11 @@ func New(
 	}
 	grpcAddr := grpcURL[7:]
 
-	httpClient := iscmoveclient.NewHTTPClient("", "", iotaclient.WaitForEffectsEnabled)
-
 	grpcClient, err := iotagrpc.NewClient(grpcAddr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create gRPC client for %s: %w", grpcAddr, err)
 	}
-	httpClient.WithGRPCClient(grpcClient)
+	httpClient := iscmoveclient.NewGRPCClient(grpcClient)
 
 	paramsFetcher := parameters.NewL1ParamsFetcher(grpcClient, log)
 
