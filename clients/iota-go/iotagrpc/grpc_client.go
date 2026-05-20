@@ -18,6 +18,7 @@ import (
 	"google.golang.org/grpc/keepalive"
 	fieldmaskpb "google.golang.org/protobuf/types/known/fieldmaskpb"
 
+	"github.com/iotaledger/wasp/clients/iota-go/iotago"
 	bcs_pb "github.com/iotaledger/wasp/clients/iota-go/iotagrpc/iota/grpc/v1/bcs"
 	ledger_service "github.com/iotaledger/wasp/clients/iota-go/iotagrpc/iota/grpc/v1/ledger_service"
 	signatures_pb "github.com/iotaledger/wasp/clients/iota-go/iotagrpc/iota/grpc/v1/signatures"
@@ -25,7 +26,6 @@ import (
 	transaction_pb "github.com/iotaledger/wasp/clients/iota-go/iotagrpc/iota/grpc/v1/transaction"
 	transaction_execution_service "github.com/iotaledger/wasp/clients/iota-go/iotagrpc/iota/grpc/v1/transaction_execution_service"
 	types_pb "github.com/iotaledger/wasp/clients/iota-go/iotagrpc/iota/grpc/v1/types"
-	"github.com/iotaledger/wasp/clients/iota-go/iotago"
 	"github.com/iotaledger/wasp/clients/iota-go/iotajsonrpc"
 )
 
