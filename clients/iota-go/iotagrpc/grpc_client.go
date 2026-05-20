@@ -498,7 +498,7 @@ func (c *Client) ExecuteTransaction(ctx context.Context, txBytes []byte, signatu
 				Signatures: &signatures_pb.UserSignatures{Signatures: sigs},
 			},
 		},
-		ReadMask: &fieldmaskpb.FieldMask{Paths: []string{"effects"}},
+		ReadMask: &fieldmaskpb.FieldMask{Paths: []string{"effects", "transaction.digest"}},
 	})
 	if err != nil {
 		return "", fmt.Errorf("ExecuteTransaction: rpc error: %w", err)
@@ -511,10 +511,12 @@ func (c *Client) ExecuteTransaction(ctx context.Context, txBytes []byte, signatu
 	if e := r.GetError(); e != nil {
 		return "", fmt.Errorf("ExecuteTransaction: %s", e.GetMessage())
 	}
-	if r.GetExecutedTransaction() == nil {
+	executed := r.GetExecutedTransaction()
+	if executed == nil {
 		return "", fmt.Errorf("ExecuteTransaction: no executed transaction in response")
 	}
-	return "", nil
+	digest := iotago.Digest(executed.GetTransaction().GetDigest().GetDigest())
+	return digest.String(), nil
 }
 
 // ── Epoch info ────────────────────────────────────────────────────────────────
