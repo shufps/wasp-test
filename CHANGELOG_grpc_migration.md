@@ -223,7 +223,8 @@ happens only after receipt.
 | gRPC connection keepalive | Configured (30s/10s) |
 | gRPC URL validation | Startup error on wrong format |
 | Dry-run before TX | Preserved via `SimulateTransaction()` |
-| JSON-RPC / WebSocket removed | All L1 communication is exclusively via gRPC |
+| WebSocket removed | All wasp node L1 communication is exclusively via gRPC |
+| wasp-cli JSON-RPC | Intentional — CLI uses HTTP JSON-RPC, no gRPC dependency |
 | TX execution error handling | `GetError()` from gRPC response is correctly checked |
 
 ---
@@ -238,11 +239,13 @@ happens only after receipt.
 
 ## Future TODOs
 
-#### Migrate wasp-cli to gRPC
-`tools/wasp-cli` still uses JSON-RPC (`iotaclient.NewHTTP`) for L1 queries and
-`parameters.FetchLatestGRPC` via a URL derived from the HTTP API address (a workaround).
-Once the CLI gets a dedicated `grpcURL` config key, it should use `iotagrpc.NewClient`
-directly — same as `nodeconn` does — and drop the HTTP dependency for L1 entirely.
+#### wasp-cli: intentionally JSON-RPC only
+`tools/wasp-cli` uses JSON-RPC (`iotaclient.NewHTTP`) exclusively for all L1 queries.
+`parameters.FetchLatestHTTP` was added to `packages/parameters/fetcher.go` so that
+`chain deploy` can fetch epoch/gas/supply info without a gRPC client.
+
+This is a deliberate design decision: gRPC is for the wasp node and solo/tests only.
+wasp-cli stays on JSON-RPC to keep the CLI dependency-light and configuration simple.
 
 ---
 

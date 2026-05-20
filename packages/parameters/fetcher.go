@@ -71,6 +71,52 @@ func (f *l1ParamsFetcher) shouldFetch() bool {
 	return now.After(start.Add(duration))
 }
 
+// FetchLatestHTTP fetches the latest L1Params via JSON-RPC (HTTP), retrying on failure.
+// Intended for use by wasp-cli which has no gRPC client.
+func FetchLatestHTTP(ctx context.Context, client interface {
+	GetLatestIotaSystemState(ctx context.Context) (*iotajsonrpc.IotaSystemStateSummary, error)
+	GetCoinMetadata(ctx context.Context, coinType string) (*iotajsonrpc.IotaCoinMetadata, error)
+	GetTotalSupply(ctx context.Context, coinType string) (*iotajsonrpc.Supply, error)
+}) (*L1Params, error) {
+	return iotaclient.Retry(
+		ctx,
+		func() (*L1Params, error) {
+			state, err := client.GetLatestIotaSystemState(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("can't get system state: %w", err)
+			}
+			meta, err := client.GetCoinMetadata(ctx, iotajsonrpc.IotaCoinType.String())
+			if err != nil {
+				return nil, fmt.Errorf("can't get coin metadata: %w", err)
+			}
+			if meta.Decimals != BaseTokenDecimals {
+				return nil, fmt.Errorf("unsupported decimals: %d", meta.Decimals)
+			}
+			totalSupply, err := client.GetTotalSupply(ctx, iotajsonrpc.IotaCoinType.String())
+			if err != nil {
+				return nil, fmt.Errorf("can't get total supply: %w", err)
+			}
+			return &L1Params{
+				Protocol: &Protocol{
+					Epoch:                 state.Epoch,
+					ProtocolVersion:       state.ProtocolVersion,
+					SystemStateVersion:    state.SystemStateVersion,
+					ReferenceGasPrice:     state.ReferenceGasPrice,
+					EpochStartTimestampMs: state.EpochStartTimestampMs,
+					EpochDurationMs:       state.EpochDurationMs,
+				},
+				BaseToken: IotaCoinInfoFromL1Metadata(
+					coin.BaseTokenType,
+					meta,
+					coin.Value(totalSupply.Value.Uint64()),
+				),
+			}, nil
+		},
+		iotaclient.DefaultRetryCondition[*L1Params](),
+		iotaclient.WaitForEffectsEnabled,
+	)
+}
+
 // FetchLatestGRPC fetches the latest L1Params via gRPC, retrying on failure.
 func FetchLatestGRPC(ctx context.Context, grpcClient *iotagrpc.Client) (*L1Params, error) {
 	return iotaclient.Retry(
