@@ -482,13 +482,18 @@ func bcsEncodeBytes(b []byte) []byte {
 	return append(prefix, b...)
 }
 
-// ExecuteTransaction submits a signed transaction via gRPC.
-// Returns the transaction digest on success.
+
+// ExecuteTransaction submits a signed transaction via gRPC and waits until
+// the transaction is included in a checkpoint. Returns the transaction digest on success.
 func (c *Client) ExecuteTransaction(ctx context.Context, txBytes []byte, signatures [][]byte) (string, error) {
 	sigs := make([]*signatures_pb.UserSignature, len(signatures))
 	for i, sig := range signatures {
 		sigs[i] = &signatures_pb.UserSignature{Bcs: &bcs_pb.BcsData{Data: bcsEncodeBytes(sig)}}
 	}
+
+	// Step 1: submit the transaction without waiting for checkpoint inclusion.
+	fmt.Printf("[ExecuteTransaction] submitting tx\n")
+	start := time.Now()
 	resp, err := c.txExec.ExecuteTransactions(ctx, &transaction_execution_service.ExecuteTransactionsRequest{
 		Transactions: []*transaction_execution_service.ExecuteTransactionItem{
 			{
@@ -500,6 +505,7 @@ func (c *Client) ExecuteTransaction(ctx context.Context, txBytes []byte, signatu
 		},
 		ReadMask: &fieldmaskpb.FieldMask{Paths: []string{"effects", "transaction.digest"}},
 	})
+	fmt.Printf("[ExecuteTransaction] execute returned after %s, err=%v\n", time.Since(start), err)
 	if err != nil {
 		return "", fmt.Errorf("ExecuteTransaction: rpc error: %w", err)
 	}
@@ -516,8 +522,53 @@ func (c *Client) ExecuteTransaction(ctx context.Context, txBytes []byte, signatu
 		return "", fmt.Errorf("ExecuteTransaction: no executed transaction in response")
 	}
 	digest := iotago.Digest(executed.GetTransaction().GetDigest().GetDigest())
+	fmt.Printf("[ExecuteTransaction] digest=%s, waiting for checkpoint inclusion\n", digest.String())
+
+	// Step 2: poll until the transaction appears in a checkpoint.
+	if err := c.waitForCheckpointInclusion(ctx, digest); err != nil {
+		return "", fmt.Errorf("ExecuteTransaction: checkpoint inclusion: %w", err)
+	}
+	fmt.Printf("[ExecuteTransaction] checkpoint included after %s total\n", time.Since(start))
 	return digest.String(), nil
 }
+
+// waitForCheckpointInclusion polls GetTransactions until the given digest is
+// included in a checkpoint or ctx is cancelled.
+func (c *Client) waitForCheckpointInclusion(ctx context.Context, digest iotago.Digest) error {
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			stream, err := c.ledger.GetTransactions(ctx, &ledger_service.GetTransactionsRequest{
+				Requests: &ledger_service.TransactionRequests{
+					Requests: []*ledger_service.TransactionRequest{
+						{Digest: &types_pb.Digest{Digest: digest[:]}},
+					},
+				},
+				ReadMask: &fieldmaskpb.FieldMask{Paths: []string{"checkpoint"}},
+			})
+			if err != nil {
+				fmt.Printf("[waitForCheckpointInclusion] GetTransactions error: %v\n", err)
+				continue
+			}
+			msg, err := stream.Recv()
+			if err != nil {
+				fmt.Printf("[waitForCheckpointInclusion] stream.Recv error: %v\n", err)
+				continue
+			}
+			for _, res := range msg.GetTransactionResults() {
+				if ex := res.GetExecutedTransaction(); ex != nil && ex.Checkpoint != nil {
+					fmt.Printf("[waitForCheckpointInclusion] included in checkpoint %d\n", ex.GetCheckpoint())
+					return nil
+				}
+			}
+		}
+	}
+}
+
 
 // ── Epoch info ────────────────────────────────────────────────────────────────
 
