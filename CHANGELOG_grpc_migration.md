@@ -249,6 +249,23 @@ wasp-cli stays on JSON-RPC to keep the CLI dependency-light and configuration si
 
 ---
 
+#### Revert `ExecuteTransaction` checkpoint polling once node-side bug is fixed
+
+`ExecuteTransaction` in `clients/iota-go/iotagrpc/grpc_client.go` currently uses a
+client-side polling loop (50ms interval via `waitForCheckpointInclusion`) instead of the
+server-side `CheckpointInclusionTimeoutMs` field.
+
+Background: with `CheckpointInclusionTimeoutMs` set, the gRPC server blocks for the full
+timeout duration regardless of when the transaction is actually included in a checkpoint
+(i.e. it does not return early on inclusion). This caused ~30s latency per transaction even
+though checkpoints are produced at ~20/s. The L1 node team has been informed.
+
+Once the server-side behavior is fixed (early return upon checkpoint inclusion), the polling
+loop can be replaced with a simple `CheckpointInclusionTimeoutMs` of a few hundred
+milliseconds.
+
+---
+
 #### Replace manual BCS parsing with `bcs.Unmarshal` from the iota-rust-sdk Go binding
 Several places in the gRPC event pipeline manually parse raw BCS bytes (e.g. in `event_listener.go`).
 Once the iota-rust-sdk Go binding exposes `bcs.Unmarshal` for the relevant types, these manual
