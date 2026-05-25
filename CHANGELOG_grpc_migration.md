@@ -249,9 +249,33 @@ wasp-cli stays on JSON-RPC to keep the CLI dependency-light and configuration si
 
 ---
 
----
+## 8. BCS Struct Migration (`clients/iota-go/iotagrpc/`)
 
-#### Replace manual BCS parsing with `bcs.Unmarshal` from the iota-rust-sdk Go binding
-Several places in the gRPC event pipeline manually parse raw BCS bytes (e.g. in `event_listener.go`).
-Once the iota-rust-sdk Go binding exposes `bcs.Unmarshal` for the relevant types, these manual
-parsing steps should be replaced to reduce maintenance burden and improve correctness guarantees.
+All manual BCS parsing (hand-written byte readers) replaced with proper Go structs + `bcs.Unmarshal` / `bcs.UnmarshalStream` from `github.com/iotaledger/bcs-go`.
+
+### New files
+
+| File | Description |
+|---|---|
+| `bcs_types.go` | BCS structs for object decoding: `versionedObject`, `grpcObject`, `grpcObjectData`, `grpcMoveStruct`, `coinContents`; helpers `ownerAddress`, `moveObjectTypeToCoinType` |
+| `bcs_system_state.go` | BCS structs for system state decoding: `sysValidatorMetadataV1`, `sysStakingPoolV1`, `sysValidatorV1`, `sysValidatorSetV1/V2`, `sysStateHeadV1/V2` |
+
+### Deleted from `grpc_client.go`
+
+- `bcsReader` type and all methods (`readU8`, `readU64`, `readU32`, `readULEB128`, `readBytes`, `readString`, `skip`, `readMoveObjectType`, `readTypeTag`, `readStructTag`, `skipStructTag`, ~10 more)
+- All `skipValidator*` and `skipStakingPool*` helpers
+- ~400 lines total removed
+
+### Changed functions
+
+| Function | Before | After |
+|---|---|---|
+| `parseObjectBCS` | ~50 lines, manual byte reading via `bcsReader` | ~15 lines, `bcs.UnmarshalStream[versionedObject]` |
+| `parseCoinFromObjectBCS` | ~60 lines, manual byte reading | ~30 lines, `bcs.UnmarshalStream[versionedObject]` |
+| `decodeSystemStateBCS` | ~300 lines, manual byte reading + 6 `skip*` helpers | ~25 lines, `bcs.NewDecoder` + struct decode |
+
+### Notes
+
+- `bcs.UnmarshalStream` (not `bcs.Unmarshal`) is used for object decoding because the gRPC wire format includes a trailing byte after the last struct field that would trigger a strict "excess bytes" check. Streaming decode reads only what the struct consumes.
+- `grpcMoveStruct` intentionally omits `HasPublicTransfer` — it is not present in `iota-sdk-types::MoveStruct` (only in the internal `iota-types::MoveObject` used on the JSON-RPC path).
+- Fixed-size `Bag` / `Table` / `StorageFund` fields in system state are decoded as `[40]byte` / `[16]byte` blobs (their internal structure is not needed).
