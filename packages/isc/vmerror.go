@@ -89,7 +89,7 @@ func (e *VMErrorTemplate) Create(params ...VMErrorParam) *VMError {
 // Error implements the error interface. VMErrorTemplate implements error just in case someone panics with it.
 // VMErrorTemplate by mistake, so that we don't crash the VM because of that.
 func (e *VMErrorTemplate) Error() string {
-	// calling Sprintf so that it marks missing parameters as errors
+	//nolint:govet // calling Sprintf so that it marks missing parameters as errors
 	return fmt.Sprintf(e.messageFormat)
 }
 
