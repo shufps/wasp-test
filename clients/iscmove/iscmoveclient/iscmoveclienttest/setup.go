@@ -2,6 +2,7 @@ package iscmoveclienttest
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -34,8 +35,11 @@ func NewHTTPClient() *iscmoveclient.SoloClient {
 	)
 	var grpcClient *iotagrpc.Client
 	if grpcURL := l1starter.Instance().GrpcURL(); grpcURL != "" {
-		grpcAddr := grpcURL[len("grpc://"):]
-		grpcClient, _ = iotagrpc.NewClient(grpcAddr)
+		var err error
+		grpcClient, err = iotagrpc.NewClient(grpcURL)
+		if err != nil {
+			panic(fmt.Sprintf("iscmoveclienttest.NewHTTPClient: gRPC client: %v", err))
+		}
 	}
 	return iscmoveclient.NewSoloClient(httpClient, grpcClient)
 }

@@ -30,9 +30,9 @@ import (
 	"github.com/iotaledger/wasp/clients/chainclient"
 	"github.com/iotaledger/wasp/clients/iota-go/iotaclient"
 	"github.com/iotaledger/wasp/clients/iota-go/iotago"
+	"github.com/iotaledger/wasp/clients/iota-go/iotagrpc"
 	"github.com/iotaledger/wasp/clients/iota-go/iotajsonrpc"
 	testcommon "github.com/iotaledger/wasp/clients/iota-go/test_common"
-	"github.com/iotaledger/wasp/clients/iota-go/iotagrpc"
 	"github.com/iotaledger/wasp/clients/multiclient"
 	"github.com/iotaledger/wasp/packages/apilib"
 	"github.com/iotaledger/wasp/packages/coin"
@@ -83,8 +83,7 @@ func New(name string, config *ClusterConfig, dataPath string, t *testing.T, log 
 		config.Wasp[i].PackageID = l1PacakgeID
 	}
 	client := config.L1Client()
-	grpcAddr := config.L1.GrpcURL()[len("grpc://"):]
-	grpcClient, err := iotagrpc.NewClient(grpcAddr)
+	grpcClient, err := iotagrpc.NewClient(config.L1.GrpcURL())
 	if err != nil {
 		panic(fmt.Sprintf("cluster: failed to create gRPC client: %v", err))
 	}

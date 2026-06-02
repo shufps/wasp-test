@@ -16,9 +16,9 @@ import (
 	"github.com/iotaledger/hive.go/log"
 	"github.com/iotaledger/wasp/clients/iota-go/iotaclient"
 	"github.com/iotaledger/wasp/clients/iota-go/iotago"
+	"github.com/iotaledger/wasp/clients/iota-go/iotagrpc"
 	"github.com/iotaledger/wasp/clients/iota-go/iotajsonrpc"
 	"github.com/iotaledger/wasp/clients/iota-go/iotasigner"
-	"github.com/iotaledger/wasp/clients/iota-go/iotagrpc"
 	"github.com/iotaledger/wasp/clients/iscmove/iscmoveclient"
 	"github.com/iotaledger/wasp/packages/chain"
 	"github.com/iotaledger/wasp/packages/chain/cons/cons_gr"
@@ -56,7 +56,7 @@ type nodeConnection struct {
 	log.Logger
 
 	iscPackageID        iotago.PackageID
-	l1Client          *iscmoveclient.GRPCClient
+	l1Client            *iscmoveclient.GRPCClient
 	l1ParamsFetcher     parameters.L1ParamsFetcher
 	grpcURL             string
 	maxNumberOfRequests int
@@ -79,11 +79,10 @@ func New(
 	if len(grpcURL) < 7 || grpcURL[:7] != "grpc://" {
 		return nil, fmt.Errorf("grpcURL must start with grpc://, got: %q", grpcURL)
 	}
-	grpcAddr := grpcURL[7:]
 
-	grpcClient, err := iotagrpc.NewClient(grpcAddr)
+	grpcClient, err := iotagrpc.NewClient(grpcURL)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create gRPC client for %s: %w", grpcAddr, err)
+		return nil, fmt.Errorf("failed to create gRPC client for %s: %w", grpcURL, err)
 	}
 	l1Client := iscmoveclient.NewGRPCClient(grpcClient) // *GRPCClient — pure gRPC, no JSON-RPC fallback
 
@@ -93,7 +92,7 @@ func New(
 		Logger:              log,
 		iscPackageID:        iscPackageID,
 		grpcURL:             grpcURL,
-		l1Client:          l1Client,
+		l1Client:            l1Client,
 		l1ParamsFetcher:     paramsFetcher,
 		maxNumberOfRequests: maxNumberOfRequests,
 		chainsMap: shrinkingmap.New[isc.ChainID, *ncChain](

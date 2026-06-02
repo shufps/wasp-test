@@ -8,6 +8,7 @@ import (
 	"context"
 	"math"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -163,8 +164,10 @@ func New(t Context, initOptions ...*InitOptions) *Solo {
 	ctx, cancelCtx := context.WithCancel(context.Background())
 	t.Cleanup(cancelCtx)
 
-	grpcAddr := opt.L1Config.IotaGrpcURL[len("grpc://"):]
-	grpcClient, err := iotagrpc.NewClient(grpcAddr)
+	if !strings.HasPrefix(opt.L1Config.IotaGrpcURL, "grpc://") {
+		panic(fmt.Sprintf("solo: IotaGrpcURL must start with grpc://, got: %q", opt.L1Config.IotaGrpcURL))
+	}
+	grpcClient, err := iotagrpc.NewClient(opt.L1Config.IotaGrpcURL)
 	if err != nil {
 		panic(fmt.Sprintf("solo: failed to create gRPC client: %v", err))
 	}

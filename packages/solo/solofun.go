@@ -32,8 +32,9 @@ func (env *Solo) ISCMoveClient() *iscmoveclient.SoloClient {
 	)
 	var grpcClient *iotagrpc.Client
 	if env.l1Config.IotaGrpcURL != "" {
-		grpcAddr := env.l1Config.IotaGrpcURL[len("grpc://"):]
-		grpcClient, _ = iotagrpc.NewClient(grpcAddr)
+		var err error
+		grpcClient, err = iotagrpc.NewClient(env.l1Config.IotaGrpcURL)
+		require.NoError(env.T, err)
 	}
 	return iscmoveclient.NewSoloClient(httpClient, grpcClient)
 }
