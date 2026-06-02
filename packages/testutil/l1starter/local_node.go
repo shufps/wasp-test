@@ -53,20 +53,26 @@ func (in *LocalIotaNode) start(ctx context.Context) {
 	portWaiter := wait.ForAll(
 		wait.ForListeningPort("9000/tcp"),
 		wait.ForListeningPort("9123/tcp"),
+		wait.ForListeningPort("50051/tcp"),
 	).WithDeadline(4 * time.Minute)
 
 	req := testcontainers.ContainerRequest{
 		Image:         "iotaledger/iota-tools:devnet",
 		ImagePlatform: imagePlatform,
-		ExposedPorts:  []string{"9000/tcp", "9123/tcp"},
+		ExposedPorts:  []string{"9000/tcp", "9123/tcp", "50051/tcp"},
 		WaitingFor:    portWaiter,
 		Cmd: []string{
-			"iota",
+			"iota-localnet",
 			"start",
 			"--force-regenesis",
 			fmt.Sprintf("--epoch-duration-ms=%d", 60000),
 			"--with-faucet",
 			fmt.Sprintf("--faucet-amount=%d", iotaclient.SingleCoinFundsFromFaucetAmount),
+			// Bind the gRPC API to 0.0.0.0:50051 so testcontainers can port-map it.
+			// Without this flag the node enables gRPC on 127.0.0.1:<random>, which is
+			// unreachable through Docker port mapping. Requires an iota-tools image that
+			// includes the --with-grpc flag (iota PR #11041, ≳ v1.21 devnet).
+			"--with-grpc=0.0.0.0:50051",
 		},
 	}
 
@@ -100,8 +106,15 @@ func (in *LocalIotaNode) start(ctx context.Context) {
 		panic(fmt.Errorf("failed to get faucet port: %w", err))
 	}
 
+	grpcPort, err := container.MappedPort(ctxTimeout, "50051")
+	if err != nil {
+		container.Terminate(ctxTimeout)
+		panic(fmt.Errorf("failed to get gRPC port: %w", err))
+	}
+
 	in.config.Ports.RPC = webAPIPort.Int()
 	in.config.Ports.Faucet = faucetPort.Int()
+	in.config.Ports.Grpc = grpcPort.Int()
 
 	in.logf("Starting LocalIotaNode... done! took: %v", time.Since(now).Truncate(time.Millisecond))
 	in.waitAllHealthy(ctxTimeout)
@@ -135,8 +148,11 @@ func (in *LocalIotaNode) FaucetURL() string {
 	return fmt.Sprintf("%s:%d/gas", in.config.Host, in.config.Ports.Faucet)
 }
 
+// GrpcURL returns the gRPC endpoint for the local node. The node is started with
+// --with-grpc=0.0.0.0:50051 (see start()), and testcontainers maps container port
+// 50051 to this host port.
 func (in *LocalIotaNode) GrpcURL() string {
-	return fmt.Sprintf("grpc://localhost:%d", in.config.Ports.RPC)
+	return fmt.Sprintf("grpc://localhost:%d", in.config.Ports.Grpc)
 }
 
 func (in *LocalIotaNode) L1Client() clients.L1Client {

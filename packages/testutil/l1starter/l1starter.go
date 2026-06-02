@@ -29,6 +29,7 @@ var (
 type Ports struct {
 	RPC    int
 	Faucet int
+	Grpc   int
 }
 
 type Config struct {
