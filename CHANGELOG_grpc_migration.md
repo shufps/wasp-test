@@ -2,9 +2,14 @@
 
 ## Overview
 
-The entire L1 communication has been migrated from **WebSocket + HTTP JSON-RPC** to **gRPC**.
-The indexer is no longer required. All `iotax_*` calls (getCoins, getDynamicFields, etc.)
-now run through gRPC `StateService`, `LedgerService`, and `TransactionExecutionService`.
+The **wasp node's** L1 communication has been migrated from **WebSocket + HTTP JSON-RPC** to
+**gRPC**, so the node no longer needs a co-located Indexer. All of the node's `iotax_*`-style
+reads (getCoins, getDynamicFields, etc.) now run through gRPC `StateService`, `LedgerService`,
+and `TransactionExecutionService`.
+
+This is **node-only** by design — wasp-cli, solo and the test/integration tooling stay on
+JSON-RPC and point at a separate Indexer endpoint. See "Transport architecture" below for the
+rationale and the per-consumer split.
 
 ---
 
@@ -237,15 +242,33 @@ happens only after receipt.
 
 ---
 
-## Future TODOs
+## Transport architecture: gRPC (node) vs JSON-RPC (cli / tests)
 
-#### wasp-cli: intentionally JSON-RPC only
-`tools/wasp-cli` uses JSON-RPC (`iotaclient.NewHTTP`) exclusively for all L1 queries.
-`parameters.FetchLatestHTTP` was added to `packages/parameters/fetcher.go` so that
-`chain deploy` can fetch epoch/gas/supply info without a gRPC client.
+JSON-RPC is **not** being removed — it remains available via the **Indexer**. Moving the node
+to gRPC is an *operational* decision, not a protocol deprecation: on main/testnet each Wasp
+node runs next to its own IOTA node (≈6 committee + N access nodes). Co-locating an Indexer
+(which requires a Postgres) with every one of those L1 nodes is too much overhead, so the
+wasp **node** talks to its lean, indexer-less IOTA node over **gRPC** instead.
 
-This is a deliberate design decision: gRPC is for the wasp node and solo/tests only.
-wasp-cli stays on JSON-RPC to keep the CLI dependency-light and configuration simple.
+Everything else intentionally stays on JSON-RPC, pointed at a **separate** L1 endpoint:
+
+| Consumer | Transport | Config key | Endpoint |
+|---|---|---|---|
+| wasp node (daemon) | gRPC | `l1.grpcURL` (`grpc://host:50051`) | its co-located IOTA node (no indexer) |
+| wasp-cli | JSON-RPC | `l1.apiAddress` | a (public) Indexer exposing JSON-RPC |
+| solo / integration tests | JSON-RPC (+ gRPC for a few node-path ops) | l1starter config | an Indexer docker image (or current localnet) |
+
+The node's `l1.grpcURL` and the CLI's `l1.apiAddress` are **independent** config values and
+normally point at different hosts — the CLI never talks to the committee's per-node IOTA nodes.
+`parameters.FetchLatestHTTP` exists so `wasp-cli chain deploy` can fetch epoch/gas/supply over
+JSON-RPC without a gRPC client.
+
+**This is the target architecture, not a migration gap.** JSON-RPC operations that have no gRPC
+equivalent — `SignAndExecuteTransaction`, `Publish`/`PublishContract`, `GetAllBalances`/`GetBalance`,
+and the iscmove request-posting methods (`StartNewChain`, `CreateAndSendRequest*`,
+`ReceiveRequestsAndTransition`) — are intentionally **not** being ported to gRPC; they stay on the
+JSON-RPC/Indexer path used by cli and tests. Per maintainer guidance, transitions are kept to the
+minimum needed to keep main stable: only the wasp node was moved to gRPC.
 
 ---
 
@@ -279,3 +302,50 @@ All manual BCS parsing (hand-written byte readers) replaced with proper Go struc
 - `bcs.UnmarshalStream` (not `bcs.Unmarshal`) is used for object decoding because the gRPC wire format includes a trailing byte after the last struct field that would trigger a strict "excess bytes" check. Streaming decode reads only what the struct consumes.
 - `grpcMoveStruct` intentionally omits `HasPublicTransfer` — it is not present in `iota-sdk-types::MoveStruct` (only in the internal `iota-types::MoveObject` used on the JSON-RPC path).
 - Fixed-size `Bag` / `Table` / `StorageFund` fields in system state are decoded as `[40]byte` / `[16]byte` blobs (their internal structure is not needed).
+
+---
+
+## 9. Review Fixes (post-review hardening)
+
+Scope is deliberately limited to defects **introduced by / required by the gRPC
+migration**. Pre-existing bugs in non-gRPC code that were noticed during review
+are listed under "Out of scope" below and left for separate PRs.
+
+### 🔴 Correctness / crash
+
+| Fix | File | What |
+|---|---|---|
+| `PickupCoins` nil-target panic | `clients/iota-go/iotagrpc/grpc_client.go` | `GetCoinObjsForTargetAmount` (new gRPC code) passed `nil` as the `*big.Int` target to `PickupCoins`, which dereferences it (`big.Int.Add(nil, …)`) → guaranteed nil-pointer panic on every call. Now passes `new(big.Int).SetUint64(targetAmount)`, matching the JSON-RPC implementation. Regression test added in `grpc_client_pickup_test.go`. |
+| `node_test.go` build failure | `packages/chain/node_test.go` + `packages/parameters/parameterstest/parameterstest.go` | The migration changed `parameters.NewL1ParamsFetcher` to take `*iotagrpc.Client`, but the test still passed `*iotaclient.Client` → `packages/chain` (and everything depending on its test helpers) failed to compile. Added `parameterstest.MockL1ParamsFetcher` (no-network) and used it in the test. |
+| Local node gRPC unreachable | `packages/testutil/l1starter/local_node.go`, `l1starter.go` | `GrpcURL()` returned the mapped REST port (9000); gRPC calls hit the JSON-RPC server → HTTP 404 → gRPC-go reports `Unimplemented` (this is the `TestReceiveRequestAndTransition` failure). Root cause: with gRPC enabled but no explicit address, the node binds gRPC to `127.0.0.1:<random>` (`iota-swarm-config/node_config_builder.rs` fallback) — a loopback bind that Docker cannot port-map. Fix: pass `--with-grpc=0.0.0.0:50051` (iota PR #11041), expose/map `50051`, and point `GrpcURL()` at the mapped port. Also renames the container `Cmd` from the removed `iota` subcommand to `iota-localnet` (required for the container to boot on the current image — prerequisite for the gRPC wiring). Verified: `TestReceiveRequestAndTransition` and `TestStartNewChain` pass against `iota-tools:devnet` (iota ≥ 1.24.0-beta). Requires an image that includes `--with-grpc`. |
+
+### 🟠 Robustness / resource (all in gRPC-introduced code)
+
+| Fix | File | What |
+|---|---|---|
+| `CLIClient.GetAssetsBagWithBalances` implemented (JSON-RPC) | `clients/iscmove/iscmoveclient/client.go` | The migration's client split left this a panic stub, which broke `wasp-cli inspect assetsbag` and the `L2Client` contract. Re-implemented over JSON-RPC (`iotax_getDynamicFields` + `iota_getObject`) — the pre-migration logic — so the CLI/L2Client path works against a JSON-RPC Indexer. Verified live (the JSON-RPC path runs against the local node in `TestNodeBasic`). It intentionally stays JSON-RPC (see "Transport architecture"); the node uses the separate gRPC `GRPCClient` variant. `SoloClient`'s nil-grpc guards are left as panics (test-only programmer-error assertions). |
+| Ignored `iotagrpc.NewClient` errors | `packages/solo/solofun.go`, `clients/iscmove/iscmoveclient/iscmoveclienttest/setup.go` | New gRPC client construction discarded the error (`_ =`); now handled (`require.NoError` / `panic` with context). |
+| Unguarded `grpc://` prefix slicing | `packages/solo/solo.go`, `solofun.go`, `tools/cluster/cluster.go`, `iscmoveclienttest/setup.go` | New gRPC-URL parsing used `url[len("grpc://"):]`, which panics on a malformed URL. Replaced with `strings.HasPrefix` guard + `strings.TrimPrefix`. |
+| DEBUG-to-stderr from library code | `clients/iscmove/iscmoveclient/grpc_client.go` | Removed the `os.Getenv("DEBUG")` stderr block added with the new gRPC client. |
+
+### ◻️ Out of scope — pre-existing issues noticed but NOT changed here
+
+Found during review but unrelated to the gRPC migration (present identically in
+the pre-PR baseline / upstream). Left for separate PRs to keep this diff focused:
+
+- **`PublishTX` deadlock** (`nodeconn.go`) — unbuffered `publishTxQueue` send isn't ctx-guarded; blocks forever if `postTxLoop` already exited. Identical in upstream.
+- **`time.Unix` ms-as-seconds** (`parameters/fetcher.go:69`) — `shouldFetch` treats a ms timestamp as seconds → `L1Params` effectively cached forever after first fetch. Pre-existing; fix is `time.UnixMilli`.
+- **`ClusterStart` unreachable code** (`l1starter.go`) — dead statements after `panic` (`go vet`). Pre-existing.
+- **`container.Start()` unchecked error** (`local_node.go`) — masks the real startup failure as a misleading `port "9000" not found` panic. Pre-existing.
+- **`GetEpochInfo` swallows `decodeSystemStateBCS` error** — the PR author intentionally ignores it ("best-effort; missing fields stay 0"). A `WarnLog` would help observability but second-guesses a documented choice; defer.
+- **Hardcoded `CheckpointInclusionTimeoutMs = 5000`** (`grpc_client.go`) — a timeout does not prove the TX failed; treating it as failure + retry can double-publish. The real fix is publish/retry idempotency (consensus-adjacent), not a config knob; defer.
+- **`feed.go` bare channel sends** (`consumeRequestEvents` / `subscribeToAnchorUpdates`) — `requests <- …` / `anchorCh <- …` are not ctx-guarded, so the goroutine can leak if the consumer stops on shutdown. **Byte-identical in develop and the pre-PR base** (the migration carried the pattern over from the WebSocket version); upstream has never fixed it. Pre-existing; left as-is.
+
+### ⏸️ Deferred follow-ups (gRPC-related, but bigger than this PR)
+
+1. **Checkpoint cursor persistence** — `StreamClient` does not resume from the last processed checkpoint on reconnect; events during an outage are not replayed (same behavior as the old WebSocket code). Feature work.
+2. **`ConsensusL1InfoProposal` panics** — the goroutine panics on any L1/gRPC error during consensus. Confirmed pre-existing (identical in upstream). The proper fix changes the `cons_gr.NodeConnL1Info` channel contract — architectural, separate PR.
+
+### ✅ Intentional behavior change (analyzed — safe, NOT a follow-up)
+
+- **Anchor updates now deliver the latest anchor, not the per-checkpoint version.** The old WebSocket path fetched the exact per-transaction anchor (`TryGetPastObject` at the tx's version); `event_listener.SubscribeAnchorUpdates` now fetches the latest anchor (`GetAnchorFromObjectID`), so rapid successive mutations collapse to the newest confirmed tip and intermediate state indices aren't delivered individually. **Analyzed as safe**: the chain only ever acts on the latest confirmed L1 tip (cmt_log `VarLocalView`/`VarConsInsts` keep only the newest confirmed anchor and discard anything below), and the content of any skipped intermediate L2 blocks is back-filled by the state manager (`ChainFetchStateDiff` walks `PreviousL1Commitment` to the common ancestor + P2P `GetBlock`). No liveness/safety impact — collapsing to the tip is the desired BFT outcome. Rationale documented inline in `event_listener.go`.
