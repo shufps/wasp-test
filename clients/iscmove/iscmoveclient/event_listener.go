@@ -181,6 +181,22 @@ func (g *GRpcClientWrapper) SubscribeAnchorUpdates(ctx context.Context) (<-chan 
 				}
 				// At least one tx in this checkpoint touched the anchor.
 				// Fetch the current anchor state via HTTP (gRPC Object has no owner field).
+				//
+				// NOTE (gRPC migration — behavior change vs the old WebSocket path):
+				// the old path fetched the EXACT per-transaction anchor version
+				// (TryGetPastObject at the tx's anchor version), so every mutation was
+				// delivered at its own state index. Here we fetch the LATEST anchor, so
+				// when several anchor mutations land in quick succession the notifications
+				// collapse to the most recent on-chain anchor and intermediate state
+				// indices are not delivered individually.
+				//
+				// This is intentional and safe for our model: the chain only ever acts on
+				// the latest confirmed L1 tip — cmt_log's VarLocalView/VarConsInsts keep
+				// only the newest confirmed anchor and discard anything below it — and the
+				// content of any skipped intermediate L2 blocks is back-filled by the state
+				// manager (ChainFetchStateDiff walks PreviousL1Commitment to the common
+				// ancestor and fetches missing blocks over P2P). So collapsing to the tip is
+				// the desired BFT outcome, not a lost update.
 				anchor, err := g.httpClient.GetAnchorFromObjectID(ctx, &g.anchorAddress)
 				if err != nil {
 					g.log.LogErrorf("grpc anchor update: failed to fetch anchor: %v", err)
