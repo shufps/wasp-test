@@ -11,6 +11,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math/big"
+	"strings"
 	"time"
 
 	bcs "github.com/iotaledger/bcs-go"
@@ -42,9 +44,9 @@ type Client struct {
 	address string
 }
 
-// NewClient dials the given gRPC address (without grpc:// prefix) and
-// returns a ready-to-use Client.
+// NewClient dials the given gRPC address and returns a ready-to-use Client.
 func NewClient(address string, opts ...grpc.DialOption) (*Client, error) {
+	address = strings.TrimPrefix(address, "grpc://")
 	defaults := []grpc.DialOption{
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithKeepaliveParams(keepalive.ClientParameters{
@@ -170,11 +172,10 @@ func (c *Client) GetCoinObjsForTargetAmount(
 		cursor = page.NextCursor[:]
 	}
 
-	picked, err := iotajsonrpc.PickupCoins(combined, nil, gasAmount, 0, 25)
+	picked, err := iotajsonrpc.PickupCoins(combined, new(big.Int).SetUint64(targetAmount), gasAmount, 0, 25)
 	if err != nil {
 		return nil, err
 	}
-	_ = targetAmount
 	return picked.Coins, nil
 }
 
@@ -484,7 +485,6 @@ func bcsEncodeBytes(b []byte) []byte {
 	return append(prefix, b...)
 }
 
-
 // ExecuteTransaction submits a signed transaction via gRPC.
 // Returns the transaction digest on success.
 func (c *Client) ExecuteTransaction(ctx context.Context, txBytes []byte, signatures [][]byte) (string, error) {
@@ -525,7 +525,6 @@ func (c *Client) ExecuteTransaction(ctx context.Context, txBytes []byte, signatu
 	digest := iotago.Digest(executed.GetTransaction().GetDigest().GetDigest())
 	return digest.String(), nil
 }
-
 
 // ── Epoch info ────────────────────────────────────────────────────────────────
 
@@ -780,7 +779,6 @@ func parseCoinFromObjectBCS(
 		Balance:      iotajsonrpc.NewBigInt(coin.Balance),
 	}, nil
 }
-
 
 // ── proto helpers ─────────────────────────────────────────────────────────────
 
