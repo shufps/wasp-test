@@ -11,7 +11,6 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"os"
 
 	bcs "github.com/iotaledger/bcs-go"
 
@@ -146,13 +145,6 @@ func (c *GRPCClient) GetAssetsBagWithBalances(ctx context.Context, assetsBagID *
 	fields, err := c.grpc.GetDynamicFields(ctx, assetsBagID)
 	if err != nil {
 		return nil, fmt.Errorf("gRPC GetAssetsBagWithBalances: GetDynamicFields: %w", err)
-	}
-
-	if os.Getenv("DEBUG") != "" {
-		fmt.Fprintf(os.Stderr, "GRPCClient.GetAssetsBagWithBalances: assetsBagID=%s fields=%d\n", assetsBagID, len(fields))
-		for i, df := range fields {
-			fmt.Fprintf(os.Stderr, "  field[%d]: valueType=%q valueBCSLen=%d childID=%v\n", i, df.ValueType, len(df.ValueBCS), df.ChildID)
-		}
 	}
 
 	bag := iscmove.AssetsBagWithBalances{
