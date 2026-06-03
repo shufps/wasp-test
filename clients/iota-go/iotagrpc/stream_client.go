@@ -10,13 +10,11 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
 
 	"github.com/iotaledger/hive.go/log"
 
 	ledger_service "github.com/iotaledger/wasp/clients/iota-go/iotagrpc/iota/grpc/v1/ledger_service"
-
 )
 
 const defaultBuf = 64
@@ -49,7 +47,7 @@ func newStreamClient[T any](
 	opts ...grpc.DialOption,
 ) *StreamClient[T] {
 	defaultOpts := []grpc.DialOption{
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithTransportCredentials(transportCredentials(address)),
 		grpc.WithKeepaliveParams(
 			keepalive.ClientParameters{
 				Time:                30 * time.Second,

@@ -9,15 +9,18 @@ package iotagrpc
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"math/big"
+	"net"
 	"strings"
 	"time"
 
 	bcs "github.com/iotaledger/bcs-go"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
 	fieldmaskpb "google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -48,7 +51,7 @@ type Client struct {
 func NewClient(address string, opts ...grpc.DialOption) (*Client, error) {
 	address = strings.TrimPrefix(address, "grpc://")
 	defaults := []grpc.DialOption{
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithTransportCredentials(transportCredentials(address)),
 		grpc.WithKeepaliveParams(keepalive.ClientParameters{
 			Time:                30 * time.Second,
 			Timeout:             10 * time.Second,
@@ -70,6 +73,24 @@ func NewClient(address string, opts ...grpc.DialOption) (*Client, error) {
 
 func (c *Client) Close() error {
 	return c.conn.Close()
+}
+
+// transportCredentials selects gRPC transport security for address. Loopback
+// endpoints (the local test node, dev setups) speak plaintext gRPC; any other
+// host (e.g. a public grpc.<network>.iota.cafe endpoint) is assumed to be
+// TLS-terminated, so we dial with TLS using the system root CAs.
+func transportCredentials(address string) credentials.TransportCredentials {
+	host := strings.TrimPrefix(address, "grpc://")
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	if host == "localhost" {
+		return insecure.NewCredentials()
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return insecure.NewCredentials()
+	}
+	return credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS12})
 }
 
 // ── Coin queries ──────────────────────────────────────────────────────────────
