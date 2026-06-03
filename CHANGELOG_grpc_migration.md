@@ -316,7 +316,7 @@ are listed under "Out of scope" below and left for separate PRs.
 | Fix | File | What |
 |---|---|---|
 | `PickupCoins` nil-target panic | `clients/iota-go/iotagrpc/grpc_client.go` | `GetCoinObjsForTargetAmount` (new gRPC code) passed `nil` as the `*big.Int` target to `PickupCoins`, which dereferences it (`big.Int.Add(nil, …)`) → guaranteed nil-pointer panic on every call. Now passes `new(big.Int).SetUint64(targetAmount)`, matching the JSON-RPC implementation. Regression test added in `grpc_client_pickup_test.go`. |
-| `node_test.go` build failure | `packages/chain/node_test.go` + `packages/parameters/parameterstest/parameterstest.go` | The migration changed `parameters.NewL1ParamsFetcher` to take `*iotagrpc.Client`, but the test still passed `*iotaclient.Client` → `packages/chain` (and everything depending on its test helpers) failed to compile. Added `parameterstest.MockL1ParamsFetcher` (no-network) and used it in the test. |
+| `node_test.go` build failure | `packages/chain/node_test.go` | The migration changed `parameters.NewL1ParamsFetcher` to take `*iotagrpc.Client`, but the test still passed `*iotaclient.Client` → `packages/chain` (and everything depending on its test helpers) failed to compile. The test now builds a real `iotagrpc.Client` against the local node's `GrpcURL()`. |
 | Local node gRPC unreachable | `packages/testutil/l1starter/local_node.go`, `l1starter.go` | `GrpcURL()` returned the mapped REST port (9000); gRPC calls hit the JSON-RPC server → HTTP 404 → gRPC-go reports `Unimplemented` (this is the `TestReceiveRequestAndTransition` failure). Root cause: with gRPC enabled but no explicit address, the node binds gRPC to `127.0.0.1:<random>` (`iota-swarm-config/node_config_builder.rs` fallback) — a loopback bind that Docker cannot port-map. Fix: pass `--with-grpc=0.0.0.0:50051` (iota PR #11041), expose/map `50051`, and point `GrpcURL()` at the mapped port. Also renames the container `Cmd` from the removed `iota` subcommand to `iota-localnet` (required for the container to boot on the current image — prerequisite for the gRPC wiring). Verified: `TestReceiveRequestAndTransition` and `TestStartNewChain` pass against `iota-tools:devnet` (iota ≥ 1.24.0-beta). Requires an image that includes `--with-grpc`. |
 
 ### 🟠 Robustness / resource (all in gRPC-introduced code)
@@ -349,3 +349,65 @@ the pre-PR baseline / upstream). Left for separate PRs to keep this diff focused
 ### ✅ Intentional behavior change (analyzed — safe, NOT a follow-up)
 
 - **Anchor updates now deliver the latest anchor, not the per-checkpoint version.** The old WebSocket path fetched the exact per-transaction anchor (`TryGetPastObject` at the tx's version); `event_listener.SubscribeAnchorUpdates` now fetches the latest anchor (`GetAnchorFromObjectID`), so rapid successive mutations collapse to the newest confirmed tip and intermediate state indices aren't delivered individually. **Analyzed as safe**: the chain only ever acts on the latest confirmed L1 tip (cmt_log `VarLocalView`/`VarConsInsts` keep only the newest confirmed anchor and discard anything below), and the content of any skipped intermediate L2 blocks is back-filled by the state manager (`ChainFetchStateDiff` walks `PreviousL1Commitment` to the common ancestor + P2P `GetBlock`). No liveness/safety impact — collapsing to the tip is the desired BFT outcome. Rationale documented inline in `event_listener.go`.
+
+## 10. Cluster-test enablement (`TestClusterMultiNodeCommittee` green on Alphanet)
+
+Running the cluster tests surfaced one real migration gap (TLS) plus
+pre-existing base-version gaps in the test harness. With the fixes below,
+`TestClusterMultiNodeCommittee` passes **12/12 subtests against Alphanet**
+(~167s), exercising the full node path over gRPC: initial sync, checkpoint
+streams, consensus, EVM JSON-RPC, off-ledger requests.
+
+### 🔴 Migration gap: gRPC client had no TLS support
+
+`iotagrpc.NewClient` and the checkpoint `StreamClient` always dialed with
+`insecure.NewCredentials()`. Public gRPC endpoints (e.g.
+`grpc://grpc.alphanet.iota.cafe`) are TLS-terminated (TLS 1.3, ALPN h2), so a
+plaintext dial got an HTTP error back from the load balancer, surfacing as
+`rpc error: code = Unimplemented … 404 … text/plain` on every call
+(`GetEpochInfo` during `WaitUntilInitiallySynced`, all streams).
+
+Fix: `transportCredentials(address)` in `grpc_client.go`, used by both dial
+sites — loopback hosts (`localhost`, `127.0.0.0/8`, `::1`) keep plaintext (the
+local test node), anything else dials TLS with system root CAs.
+
+**Documented trade-off:** a deployment pointing the node at a *plaintext* gRPC
+endpoint on a non-loopback address (LAN IP, docker service name) would now
+attempt TLS and fail to connect. No such configuration exists in this repo
+(`config_defaults.json` → `grpc://localhost:50051`; `config.json` /
+`test/config.json` → `grpc://grpc.alphanet.iota.cafe`). Code-level callers can
+override via explicit `grpc.DialOption`s; if plaintext-over-LAN deployments
+are required, a config knob (or a `grpc://`/`grpcs://` scheme split) is a
+follow-up.
+
+### 🟠 Cluster wiring: node gRPC URL was derived from the JSON-RPC API URL
+
+`cluster.NewConfig` built each node's `l1.grpcURL` as
+`"grpc://" + apiURL.Host`, and the cluster tests did not set
+`L1EndpointConfig.GrpcURL` at all. The gRPC endpoint is a **different host**
+(`grpc.alphanet.iota.cafe` vs `api.alphanet.iota.cafe`), not the API host on
+another port, so wasp nodes spoke gRPC at an HTTP server. Fixed:
+`NewConfig` now uses `l1Config.GrpcURL()` verbatim (`tools/cluster/config.go`),
+and the tests pass `GrpcURL: iotaconn.AlphanetGrpcEndpointURL`
+(`tools/cluster/tests/cluster.go`).
+
+### ◻️ Base-version gaps in the cluster test harness (test-only)
+
+Verified via git: the gRPC PR never touched these files; both bugs exist in
+the `v2.0.3` fork base, where production code had already moved to the
+one-chain-per-node model but the cluster harness had not. develop fixed both
+later; the fixes below replicate develop's approach without rebasing:
+
+1. **`"too many active chain records"` (500) from the second subtest on** —
+   `createTestWrapper` deployed a fresh chain per subtest, but the registry
+   guard allows a single chain record per node and there is no delete API
+   (deactivation keeps the record). Now deploys one chain shared by all
+   subtests (develop's model); each subtest still gets its own `ChainEnv`.
+   `packages/registry/chain_registry.go` (identical to develop) is untouched.
+2. **EVM JSON-RPC 404** — test helpers built the old multi-chain URL
+   `/v1/chains/{chainID}/evm`; the actual route is `/v1/chain/evm` (single
+   chain per node). Fixed in `env.go::NewEVMJSONRPClient` (chainID param
+   dropped, callers updated) and `evm_jsonrpc_test.go::newClusterTestEnv`.
+
+Other tests in `tools/cluster/tests` were not touched; several have their own
+base-version gaps (and some are explicitly skipped upstream).
