@@ -18,7 +18,7 @@ import (
 
 func TestDevInspectTransactionBlock(t *testing.T) {
 	client := l1starter.Instance().L1Client()
-	sender := iotatest.MakeSignerWithFunds(0, l1starter.Instance().FaucetURL())
+	sender := iotatest.MakeSignerWithFunds(0, l1starter.Instance().FaucetURL(), client)
 
 	limit := uint(3)
 	coinPages, err := client.GetCoins(
