@@ -367,18 +367,23 @@ plaintext dial got an HTTP error back from the load balancer, surfacing as
 `rpc error: code = Unimplemented … 404 … text/plain` on every call
 (`GetEpochInfo` during `WaitUntilInitiallySynced`, all streams).
 
-Fix: `transportCredentials(address)` in `grpc_client.go`, used by both dial
-sites — loopback hosts (`localhost`, `127.0.0.0/8`, `::1`) keep plaintext (the
-local test node), anything else dials TLS with system root CAs.
+Fix: the address **scheme** now selects transport security, mirroring
+http/https and ws/wss — `grpc://` (or a schemeless host:port) dials plaintext,
+`grpcs://` dials TLS with the system root CAs. Implemented in
+`transportCredentials(address)` (`grpc_client.go`), used by both dial sites;
+the URL validation in `nodeconn`, `solo` and `event_listener` accepts both
+schemes.
 
-**Documented trade-off:** a deployment pointing the node at a *plaintext* gRPC
-endpoint on a non-loopback address (LAN IP, docker service name) would now
-attempt TLS and fail to connect. No such configuration exists in this repo
-(`config_defaults.json` → `grpc://localhost:50051`; `config.json` /
-`test/config.json` → `grpc://grpc.alphanet.iota.cafe`). Code-level callers can
-override via explicit `grpc.DialOption`s; if plaintext-over-LAN deployments
-are required, a config knob (or a `grpc://`/`grpcs://` scheme split) is a
-follow-up.
+This matches the real deployment topology (confirmed with ops): wasp normally
+reaches its L1 node over a **private network in plaintext** —
+`grpc://iota:50051` inside the deployment's docker network (testnet/mainnet),
+or a VPN-reachable node on alphanet (`grpc://indexer-…-wg.….iota.cafe:50051`).
+TLS is only needed for the public endpoints, so the alphanet/testnet/devnet
+`iotaconn.*GrpcEndpointURL` constants and `config.json`/`test/config.json` now
+use `grpcs://`; localhost defaults (`config_defaults.json`, the `l1.grpcURL`
+param default) stay `grpc://`. Note: an earlier iteration selected TLS by
+"non-loopback host" — that would have broken the docker-network/VPN plaintext
+cases and was superseded by the scheme split.
 
 ### 🟠 Cluster wiring: node gRPC URL was derived from the JSON-RPC API URL
 
