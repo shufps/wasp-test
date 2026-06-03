@@ -6,10 +6,12 @@ const (
 	TestnetEndpointURL  = "https://api.testnet.iota.cafe"
 	DevnetEndpointURL   = "https://api.devnet.iota.cafe"
 
+	// grpc:// = plaintext (local / private-network nodes), grpcs:// = TLS
+	// (the public endpoints are TLS-terminated at the load balancer).
 	LocalnetGrpcEndpointURL = "grpc://localhost:50051"
-	AlphanetGrpcEndpointURL = "grpc://grpc.alphanet.iota.cafe"
-	TestnetGrpcEndpointURL  = "grpc://grpc.testnet.iota.cafe"
-	DevnetGrpcEndpointURL   = "grpc://grpc.devnet.iota.cafe"
+	AlphanetGrpcEndpointURL = "grpcs://grpc.alphanet.iota.cafe"
+	TestnetGrpcEndpointURL  = "grpcs://grpc.testnet.iota.cafe"
+	DevnetGrpcEndpointURL   = "grpcs://grpc.devnet.iota.cafe"
 
 	LocalnetFaucetURL = "http://localhost:9123/gas"
 	AlphanetFaucetURL = "https://faucet.alphanet.iota.cafe/gas"

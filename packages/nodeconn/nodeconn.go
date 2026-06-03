@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -76,8 +77,8 @@ func New(
 	log log.Logger,
 	shutdownHandler *shutdown.ShutdownHandler,
 ) (chain.NodeConnection, error) {
-	if len(grpcURL) < 7 || grpcURL[:7] != "grpc://" {
-		return nil, fmt.Errorf("grpcURL must start with grpc://, got: %q", grpcURL)
+	if !strings.HasPrefix(grpcURL, "grpc://") && !strings.HasPrefix(grpcURL, "grpcs://") {
+		return nil, fmt.Errorf("grpcURL must start with grpc:// or grpcs://, got: %q", grpcURL)
 	}
 
 	grpcClient, err := iotagrpc.NewClient(grpcURL)

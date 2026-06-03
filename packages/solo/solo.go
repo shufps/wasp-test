@@ -164,8 +164,8 @@ func New(t Context, initOptions ...*InitOptions) *Solo {
 	ctx, cancelCtx := context.WithCancel(context.Background())
 	t.Cleanup(cancelCtx)
 
-	if !strings.HasPrefix(opt.L1Config.IotaGrpcURL, "grpc://") {
-		panic(fmt.Sprintf("solo: IotaGrpcURL must start with grpc://, got: %q", opt.L1Config.IotaGrpcURL))
+	if !strings.HasPrefix(opt.L1Config.IotaGrpcURL, "grpc://") && !strings.HasPrefix(opt.L1Config.IotaGrpcURL, "grpcs://") {
+		panic(fmt.Sprintf("solo: IotaGrpcURL must start with grpc:// or grpcs://, got: %q", opt.L1Config.IotaGrpcURL))
 	}
 	grpcClient, err := iotagrpc.NewClient(opt.L1Config.IotaGrpcURL)
 	if err != nil {

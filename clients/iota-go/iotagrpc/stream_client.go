@@ -58,7 +58,7 @@ func newStreamClient[T any](
 	}
 	return &StreamClient[T]{
 		name:              name,
-		address:           address,
+		address:           stripScheme(address),
 		options:           append(defaultOpts, opts...),
 		logger:            logger,
 		events:            make(chan T, defaultBuf),

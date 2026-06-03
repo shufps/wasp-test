@@ -6,6 +6,7 @@ package iscmoveclient
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -43,11 +44,12 @@ func selectEventClient(
 	anchorID iotago.ObjectID,
 	httpClient NodeL1Client,
 ) (EventListener, error) {
-	if len(grpcURL) < 7 || grpcURL[:7] != "grpc://" {
-		return nil, fmt.Errorf("unsupported URL: %q (must start with grpc://)", grpcURL)
+	if !strings.HasPrefix(grpcURL, "grpc://") && !strings.HasPrefix(grpcURL, "grpcs://") {
+		return nil, fmt.Errorf("unsupported URL: %q (must start with grpc:// or grpcs://)", grpcURL)
 	}
-	addr := grpcURL[7:]
-	return NewGRpcClientWrapper(log, addr, iscPackageID, anchorID, httpClient), nil
+	// Pass the full URL through: the stream client derives transport security
+	// (plaintext vs TLS) from the scheme.
+	return NewGRpcClientWrapper(log, grpcURL, iscPackageID, anchorID, httpClient), nil
 }
 
 // ── gRPC wrapper ─────────────────────────────────────────────────────────────

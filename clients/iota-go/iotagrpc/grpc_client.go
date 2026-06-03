@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"io"
 	"math/big"
-	"net"
 	"strings"
 	"time"
 
@@ -48,8 +47,9 @@ type Client struct {
 }
 
 // NewClient dials the given gRPC address and returns a ready-to-use Client.
+// The address scheme selects transport security: grpcs:// dials TLS, grpc://
+// (or a schemeless host:port) dials plaintext.
 func NewClient(address string, opts ...grpc.DialOption) (*Client, error) {
-	address = strings.TrimPrefix(address, "grpc://")
 	defaults := []grpc.DialOption{
 		grpc.WithTransportCredentials(transportCredentials(address)),
 		grpc.WithKeepaliveParams(keepalive.ClientParameters{
@@ -58,6 +58,7 @@ func NewClient(address string, opts ...grpc.DialOption) (*Client, error) {
 			PermitWithoutStream: true,
 		}),
 	}
+	address = stripScheme(address)
 	conn, err := grpc.NewClient(address, append(defaults, opts...)...)
 	if err != nil {
 		return nil, fmt.Errorf("iotagrpc.NewClient: dial %s: %w", address, err)
@@ -75,22 +76,25 @@ func (c *Client) Close() error {
 	return c.conn.Close()
 }
 
-// transportCredentials selects gRPC transport security for address. Loopback
-// endpoints (the local test node, dev setups) speak plaintext gRPC; any other
-// host (e.g. a public grpc.<network>.iota.cafe endpoint) is assumed to be
-// TLS-terminated, so we dial with TLS using the system root CAs.
+// transportCredentials selects gRPC transport security from the address
+// scheme, mirroring http/https and ws/wss: grpcs:// dials TLS with the system
+// root CAs (public TLS-terminated endpoints, e.g.
+// grpcs://grpc.alphanet.iota.cafe); grpc:// (or a schemeless address) dials
+// plaintext, which is the norm for co-located / private-network nodes (e.g.
+// grpc://iota:50051 inside the deployment's docker network, the local test
+// node, or VPN-reachable nodes).
 func transportCredentials(address string) credentials.TransportCredentials {
-	host := strings.TrimPrefix(address, "grpc://")
-	if h, _, err := net.SplitHostPort(host); err == nil {
-		host = h
+	if strings.HasPrefix(address, "grpcs://") {
+		return credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS12})
 	}
-	if host == "localhost" {
-		return insecure.NewCredentials()
-	}
-	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
-		return insecure.NewCredentials()
-	}
-	return credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS12})
+	return insecure.NewCredentials()
+}
+
+// stripScheme removes the grpc:// or grpcs:// scheme prefix, leaving the
+// host:port target that grpc-go expects.
+func stripScheme(address string) string {
+	address = strings.TrimPrefix(address, "grpcs://")
+	return strings.TrimPrefix(address, "grpc://")
 }
 
 // ── Coin queries ──────────────────────────────────────────────────────────────
