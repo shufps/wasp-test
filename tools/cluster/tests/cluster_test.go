@@ -54,16 +54,19 @@ func createTestWrapper(tt *testing.T, clusterSize int, committee []int) func(t *
 	dkgAddr, err := clu.RunDKG(committee, dkgQuorum)
 	require.NoError(tt, err)
 
-	return func(t *testing.T, f func(*testing.T, *ChainEnv)) {
-		// create a fresh new chain for the test
-		allNodes := clu.Config.AllNodes()
-		chain, err := clu.DeployChain(allNodes, allNodes, dkgQuorum, dkgAddr)
-		require.NoError(t, err)
-		env := newChainEnv(t, clu, chain)
+	// A wasp node enforces a single chain record (registry guard), and there is
+	// no API to delete one. So deploy a single chain shared by all subtests
+	// instead of a fresh chain per subtest, which would otherwise fail with
+	// "too many active chain records". This matches develop's cluster-test model.
+	allNodes := clu.Config.AllNodes()
+	chain, err := clu.DeployChain(allNodes, allNodes, dkgQuorum, dkgAddr)
+	require.NoError(tt, err)
+	tt.Cleanup(func() {
+		clu.MultiClient().DeactivateChain()
+	})
 
-		t.Cleanup(func() {
-			clu.MultiClient().DeactivateChain()
-		})
-		f(t, env)
+	return func(t *testing.T, f func(*testing.T, *ChainEnv)) {
+		// fresh env (so assertions use the subtest's *testing.T), same chain
+		f(t, newChainEnv(t, clu, chain))
 	}
 }
