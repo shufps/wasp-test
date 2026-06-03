@@ -3,7 +3,6 @@ package cluster
 import (
 	"encoding/json"
 	"fmt"
-	"net/url"
 	"os"
 	"path"
 
@@ -66,12 +65,7 @@ func NewConfig(waspConfig WaspConfig, l1Config l1starter.IotaNodeEndpoint, modif
 			nodesConfigs[i] = modifyConfig[0](i, nodesConfigs[i])
 		}
 
-		apiURL := l1Config.APIURL()
-		base, err := url.Parse(apiURL)
-		if err != nil {
-			panic(fmt.Errorf("invalid API URL: %s", apiURL))
-		}
-		nodesConfigs[i].L1GrpcURL = "grpc://" + base.Host + base.Path
+		nodesConfigs[i].L1GrpcURL = l1Config.GrpcURL()
 	}
 
 	return &ClusterConfig{
