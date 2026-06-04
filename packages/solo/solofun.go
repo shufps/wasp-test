@@ -9,6 +9,7 @@ import (
 
 	"github.com/iotaledger/wasp/clients"
 	"github.com/iotaledger/wasp/clients/iota-go/iotaclient"
+	"github.com/iotaledger/wasp/clients/iota-go/iotagrpc"
 	"github.com/iotaledger/wasp/clients/iscmove/iscmoveclient"
 	"github.com/iotaledger/wasp/packages/coin"
 	"github.com/iotaledger/wasp/packages/cryptolib"
@@ -23,12 +24,19 @@ func (env *Solo) L1Client() clients.L1Client {
 	}, iotaclient.WaitForEffectsEnabled)
 }
 
-func (env *Solo) ISCMoveClient() *iscmoveclient.Client {
-	return iscmoveclient.NewHTTPClient(
+func (env *Solo) ISCMoveClient() *iscmoveclient.SoloClient {
+	httpClient := iscmoveclient.NewHTTPClient(
 		env.l1Config.IotaRPCURL,
 		env.l1Config.IotaFaucetURL,
 		l1starter.WaitUntilEffectsVisible,
 	)
+	var grpcClient *iotagrpc.Client
+	if env.l1Config.IotaGrpcURL != "" {
+		var err error
+		grpcClient, err = iotagrpc.NewClient(env.l1Config.IotaGrpcURL)
+		require.NoError(env.T, err)
+	}
+	return iscmoveclient.NewSoloClient(httpClient, grpcClient)
 }
 
 func (env *Solo) NewKeyPairFromIndex(index int) *cryptolib.KeyPair {

@@ -7,7 +7,6 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"errors"
-	"fmt"
 	"testing"
 	"time"
 
@@ -34,7 +33,8 @@ type clusterTestEnv struct {
 }
 
 func newClusterTestEnv(t *testing.T, env *ChainEnv, nodeIndex int) *clusterTestEnv {
-	evmJSONRPCPath := fmt.Sprintf("/v1/chains/%v/evm", env.Chain.ChainID.String())
+	// single chain per node: /v1/chain/evm (not /v1/chains/{chainID}/evm)
+	evmJSONRPCPath := "/v1/chain/evm"
 	jsonRPCEndpoint := env.Clu.Config.APIHost(nodeIndex) + evmJSONRPCPath
 	rawClient, err := rpc.DialHTTP(jsonRPCEndpoint)
 	require.NoError(t, err)

@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-ARG GOLANG_IMAGE_TAG=1.24-bullseye
+ARG GOLANG_IMAGE_TAG=1.26.3-trixie
 
 # Build stage
 FROM golang:${GOLANG_IMAGE_TAG} AS build
@@ -41,7 +41,7 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
 ############################
 # https://console.cloud.google.com/gcr/images/distroless/global/cc-debian11
 # using distroless cc "nonroot" image, which includes everything in the base image (glibc, libssl and openssl)
-FROM gcr.io/distroless/cc-debian11:nonroot
+FROM gcr.io/distroless/cc-debian13:nonroot
 
 EXPOSE 9090/tcp
 EXPOSE 6060/tcp

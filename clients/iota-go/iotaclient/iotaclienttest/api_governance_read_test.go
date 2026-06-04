@@ -17,8 +17,9 @@ func TestGetCommitteeInfo(t *testing.T) {
 	committeeInfo, err := client.GetCommitteeInfo(context.Background(), epochId)
 	require.NoError(t, err)
 	require.Equal(t, epochId, committeeInfo.EpochId)
-	// just use a arbitrary big number to ensure there are enough validator
-	require.Greater(t, len(committeeInfo.Validators), 3)
+	// at least one validator, so the test works against both the local
+	// single-validator node and public networks (Alphanet has many)
+	require.NotEmpty(t, committeeInfo.Validators)
 }
 
 func TestGetLatestIotaSystemState(t *testing.T) {

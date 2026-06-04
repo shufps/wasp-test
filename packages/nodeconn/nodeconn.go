@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/iotaledger/hive.go/log"
 	"github.com/iotaledger/wasp/clients/iota-go/iotaclient"
 	"github.com/iotaledger/wasp/clients/iota-go/iotago"
+	"github.com/iotaledger/wasp/clients/iota-go/iotagrpc"
 	"github.com/iotaledger/wasp/clients/iota-go/iotajsonrpc"
 	"github.com/iotaledger/wasp/clients/iota-go/iotasigner"
 	"github.com/iotaledger/wasp/clients/iscmove/iscmoveclient"
@@ -55,10 +57,9 @@ type nodeConnection struct {
 	log.Logger
 
 	iscPackageID        iotago.PackageID
-	httpClient          *iscmoveclient.Client
+	l1Client            *iscmoveclient.GRPCClient
 	l1ParamsFetcher     parameters.L1ParamsFetcher
-	wsURL               string
-	httpURL             string
+	grpcURL             string
 	maxNumberOfRequests int
 	chainsLock          sync.RWMutex
 	chainsMap           *shrinkingmap.ShrinkingMap[isc.ChainID, *ncChain]
@@ -72,20 +73,28 @@ func New(
 	ctx context.Context,
 	iscPackageID iotago.PackageID,
 	maxNumberOfRequests int,
-	wsURL string,
-	httpURL string,
+	grpcURL string,
 	log log.Logger,
 	shutdownHandler *shutdown.ShutdownHandler,
 ) (chain.NodeConnection, error) {
-	httpClient := iscmoveclient.NewHTTPClient(httpURL, "", iotaclient.WaitForEffectsEnabled)
+	if !strings.HasPrefix(grpcURL, "grpc://") && !strings.HasPrefix(grpcURL, "grpcs://") {
+		return nil, fmt.Errorf("grpcURL must start with grpc:// or grpcs://, got: %q", grpcURL)
+	}
+
+	grpcClient, err := iotagrpc.NewClient(grpcURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create gRPC client for %s: %w", grpcURL, err)
+	}
+	l1Client := iscmoveclient.NewGRPCClient(grpcClient) // *GRPCClient — pure gRPC, no JSON-RPC fallback
+
+	paramsFetcher := parameters.NewL1ParamsFetcher(grpcClient, log)
 
 	return &nodeConnection{
 		Logger:              log,
 		iscPackageID:        iscPackageID,
-		wsURL:               wsURL,
-		httpURL:             httpURL,
-		httpClient:          httpClient,
-		l1ParamsFetcher:     parameters.NewL1ParamsFetcher(httpClient.Client, log),
+		grpcURL:             grpcURL,
+		l1Client:            l1Client,
+		l1ParamsFetcher:     paramsFetcher,
 		maxNumberOfRequests: maxNumberOfRequests,
 		chainsMap: shrinkingmap.New[isc.ChainID, *ncChain](
 			shrinkingmap.WithShrinkingThresholdRatio(chainsCleanupThresholdRatio),
@@ -107,7 +116,7 @@ func (nc *nodeConnection) AttachChain(
 		nc.chainsLock.Lock()
 		defer nc.chainsLock.Unlock()
 
-		ncc, err := newNCChain(ctx, nc, chainID, recvRequest, recvAnchor, nc.wsURL, nc.httpURL)
+		ncc, err := newNCChain(ctx, nc, chainID, recvRequest, recvAnchor, nc.grpcURL)
 		if err != nil {
 			return nil, err
 		}
@@ -175,7 +184,7 @@ func (nc *nodeConnection) ConsensusL1InfoProposal(
 			panic(err)
 		}
 
-		gasCoinGetObjectRes, err := nc.httpClient.GetObject(ctx, iotaclient.GetObjectRequest{
+		gasCoinGetObjectRes, err := nc.l1Client.GetObject(ctx, iotaclient.GetObjectRequest{
 			ObjectID: stateMetadata.GasCoinObjectID,
 			Options:  &iotajsonrpc.IotaObjectDataOptions{ShowBcs: true},
 		})
@@ -234,8 +243,7 @@ func (nc *nodeConnection) WaitUntilInitiallySynced(ctx context.Context) error {
 			return ctx.Err()
 
 		case <-ticker.C:
-			_, err := nc.httpClient.GetLatestIotaSystemState(ctx)
-			if err != nil {
+			if err := nc.l1Client.Health(ctx); err != nil {
 				nc.LogWarnf("WaitUntilInitiallySynced: %s", err)
 				continue
 			}

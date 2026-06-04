@@ -93,7 +93,9 @@ func getNetworkHTTPFuns(t *testing.T) (createNewNodeFun, snapshotsAvailableFun) 
 	err := ioutils.CreateDirectory(localSnapshotsCreatePathConst, 0o777)
 	require.NoError(t, err)
 
-	port := ":9999"
+	// Dedicated port (not :9999) to avoid colliding with components/webapi's
+	// TestInternalServerErrors, which also binds :9999, under parallel `go test ./...`.
+	port := ":9097"
 	startServer(t, port, http.FileServer(http.Dir(localSnapshotsCreatePathConst)))
 
 	return getNetworkFuns(t, []string{"http://localhost" + port + "/"})

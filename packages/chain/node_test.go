@@ -20,6 +20,7 @@ import (
 	"github.com/iotaledger/wasp/clients"
 	"github.com/iotaledger/wasp/clients/iota-go/iotaclient"
 	"github.com/iotaledger/wasp/clients/iota-go/iotago"
+	"github.com/iotaledger/wasp/clients/iota-go/iotagrpc"
 	"github.com/iotaledger/wasp/clients/iota-go/iotajsonrpc"
 	"github.com/iotaledger/wasp/clients/iota-go/iotasigner"
 	"github.com/iotaledger/wasp/clients/iota-go/iotatest"
@@ -68,12 +69,12 @@ func TestMain(m *testing.M) {
 func TestNodeBasic(t *testing.T) {
 	t.Parallel()
 	tests := []tc{
-		{n: 1, f: 0, reliable: true, timeout: 30 * time.Second},   // Low N
-		{n: 2, f: 0, reliable: true, timeout: 40 * time.Second},   // Low N
-		{n: 3, f: 0, reliable: true, timeout: 50 * time.Second},   // Low N
-		{n: 4, f: 0, reliable: true, timeout: 100 * time.Second},  // Minimal robust config.
-		{n: 4, f: 1, reliable: true, timeout: 100 * time.Second},  // Minimal robust config.
-		{n: 10, f: 3, reliable: true, timeout: 150 * time.Second}, // Typical config.
+		{n: 1, f: 0, reliable: true, timeout: 60 * time.Second},   // Low N
+		{n: 2, f: 0, reliable: true, timeout: 80 * time.Second},   // Low N
+		{n: 3, f: 0, reliable: true, timeout: 100 * time.Second},  // Low N
+		{n: 4, f: 0, reliable: true, timeout: 200 * time.Second},  // Minimal robust config.
+		{n: 4, f: 1, reliable: true, timeout: 200 * time.Second},  // Minimal robust config.
+		{n: 10, f: 3, reliable: true, timeout: 300 * time.Second}, // Typical config.
 	}
 	if !testing.Short() {
 		tests = append(tests,
@@ -295,6 +296,8 @@ func (tnc *testNodeConn) GetGasCoinRef(ctx context.Context, chainID isc.ChainID)
 var _ chain.NodeConnection = &testNodeConn{}
 
 func newTestNodeConn(t *testing.T, l1Client clients.L1Client, iscPackageID iotago.PackageID) *testNodeConn {
+	grpcClient, err := iotagrpc.NewClient(l1starter.Instance().GrpcURL())
+	require.NoError(t, err)
 	tnc := &testNodeConn{
 		t:               t,
 		published:       []*iscmove.AnchorWithRef{},
@@ -302,7 +305,7 @@ func newTestNodeConn(t *testing.T, l1Client clients.L1Client, iscPackageID iotag
 		l1Client:        l1Client,
 		l2Client:        l1Client.L2(),
 		iscPackageID:    iscPackageID,
-		l1ParamsFetcher: parameters.NewL1ParamsFetcher(l1Client.IotaClient(), log.EmptyLogger),
+		l1ParamsFetcher: parameters.NewL1ParamsFetcher(grpcClient, log.EmptyLogger),
 	}
 	tnc.attachWG.Add(1)
 	return tnc

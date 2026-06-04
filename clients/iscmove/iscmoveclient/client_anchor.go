@@ -23,9 +23,9 @@ type StartNewChainRequest struct {
 	GasBudget     uint64
 }
 
-// the only exception which is doesn't use committee's GasCoin (the one in StateMetadata) for paying gas fee
-// this func automatically pick a coin
-func (c *Client) StartNewChain(
+// the only exception which doesn't use committee's GasCoin (the one in StateMetadata) for paying gas fee;
+// this func automatically picks a coin.
+func (c *CLIClient) StartNewChain(
 	ctx context.Context,
 	req *StartNewChainRequest,
 ) (*iscmove.AnchorWithRef, error) {
@@ -71,17 +71,28 @@ type ReceiveRequestsAndTransitionRequest struct {
 	GasBudget        uint64
 }
 
-func (c *Client) ReceiveRequestsAndTransition(
+func (c *CLIClient) ReceiveRequestsAndTransition(
 	ctx context.Context,
+	req *ReceiveRequestsAndTransitionRequest,
+) (*iotajsonrpc.IotaTransactionBlockResponse, error) {
+	return receiveRequestsAndTransitionWith(ctx, c, c, req)
+}
+
+// receiveRequestsAndTransitionWith is the shared implementation used by both CLIClient and SoloClient.
+// fetcher supplies GetAssetsBagWithBalances; ptbSigner supplies SignAndExecutePTB.
+func receiveRequestsAndTransitionWith(
+	ctx context.Context,
+	fetcher iscFetcher,
+	ptbSigner *CLIClient,
 	req *ReceiveRequestsAndTransitionRequest,
 ) (*iotajsonrpc.IotaTransactionBlockResponse, error) {
 	consumed := make([]ConsumedRequest, 0, len(req.ConsumedRequests))
 	for _, reqRef := range req.ConsumedRequests {
-		reqWithObj, err := c.GetRequestFromObjectID(ctx, reqRef.ObjectID)
+		reqWithObj, err := getRequestFromObjectID(ctx, fetcher, reqRef.ObjectID)
 		if err != nil {
 			return nil, err
 		}
-		assetsBag, err := c.GetAssetsBagWithBalances(ctx, &reqWithObj.Object.AssetsBag.ID)
+		assetsBag, err := fetcher.GetAssetsBagWithBalances(ctx, &reqWithObj.Object.AssetsBag.ID)
 		if err != nil {
 			return nil, err
 		}
@@ -101,7 +112,7 @@ func (c *Client) ReceiveRequestsAndTransition(
 		req.StateMetadata,
 		req.TopUpAmount,
 	)
-	return c.SignAndExecutePTB(
+	return ptbSigner.SignAndExecutePTB(
 		ctx,
 		req.Signer,
 		ptb.Finish(),
@@ -111,57 +122,14 @@ func (c *Client) ReceiveRequestsAndTransition(
 	)
 }
 
-func (c *Client) GetAnchorFromObjectID(
-	ctx context.Context,
-	anchorObjectID *iotago.ObjectID,
-) (*iscmove.AnchorWithRef, error) {
-	getObjectResponse, err := c.GetObject(ctx, iotaclient.GetObjectRequest{
-		ObjectID: anchorObjectID,
-		Options:  &iotajsonrpc.IotaObjectDataOptions{ShowBcs: true, ShowOwner: true},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to get anchor content: %w", err)
-	}
-	if getObjectResponse.Error != nil {
-		return nil, fmt.Errorf("failed to get anchor content: %s", getObjectResponse.Error.Data.String())
-	}
-	return decodeAnchorBCS(
-		getObjectResponse.Data.Bcs.Data.MoveObject.BcsBytes,
-		getObjectResponse.Data.Ref(),
-		getObjectResponse.Data.Owner.AddressOwner,
-	)
+// GetAnchorFromObjectID fetches the current anchor via JSON-RPC (HTTP client path).
+func (c *CLIClient) GetAnchorFromObjectID(ctx context.Context, anchorObjectID *iotago.ObjectID) (*iscmove.AnchorWithRef, error) {
+	return getAnchorFromObjectID(ctx, c, anchorObjectID)
 }
 
-func (c *Client) GetPastAnchorFromObjectID(
-	ctx context.Context,
-	anchorObjectID *iotago.ObjectID,
-	version uint64,
-) (*iscmove.AnchorWithRef, error) {
-	getObjectResponse, err := c.TryGetPastObject(ctx, iotaclient.TryGetPastObjectRequest{
-		ObjectID: anchorObjectID,
-		Version:  version,
-		Options:  &iotajsonrpc.IotaObjectDataOptions{ShowBcs: true, ShowOwner: true},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to get anchor content: %w", err)
-	}
-	if getObjectResponse.Data.ObjectDeleted != nil {
-		return nil, fmt.Errorf("failed to get anchor content: deleted")
-	}
-	if getObjectResponse.Data.ObjectNotExists != nil {
-		return nil, fmt.Errorf("failed to get anchor content: object does not exist")
-	}
-	if getObjectResponse.Data.VersionNotFound != nil {
-		return nil, fmt.Errorf("failed to get anchor content: version not found")
-	}
-	if getObjectResponse.Data.VersionTooHigh != nil {
-		return nil, fmt.Errorf("failed to get anchor content: version too high")
-	}
-	return decodeAnchorBCS(
-		getObjectResponse.Data.VersionFound.Bcs.Data.MoveObject.BcsBytes,
-		getObjectResponse.Data.VersionFound.Ref(),
-		getObjectResponse.Data.VersionFound.Owner.AddressOwner,
-	)
+// GetPastAnchorFromObjectID is not supported on CLIClient — use SoloClient.
+func (c *CLIClient) GetPastAnchorFromObjectID(_ context.Context, _ *iotago.ObjectID, _ uint64) (*iscmove.AnchorWithRef, error) {
+	panic("CLIClient.GetPastAnchorFromObjectID: requires gRPC — use SoloClient")
 }
 
 func decodeAnchorBCS(bcsBytes iotago.Base64Data, ref iotago.ObjectRef, owner *iotago.Address) (*iscmove.AnchorWithRef, error) {

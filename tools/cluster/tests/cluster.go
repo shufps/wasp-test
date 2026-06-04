@@ -70,6 +70,7 @@ func newCluster(t *testing.T, opt ...waspClusterOpts) *cluster.Cluster {
 		RandomizeSeed: true,
 		APIURL:        iotaconn.AlphanetEndpointURL,
 		FaucetURL:     iotaconn.AlphanetFaucetURL,
+		GrpcURL:       iotaconn.AlphanetGrpcEndpointURL,
 	})
 
 	clusterConfig := cluster.NewConfig(

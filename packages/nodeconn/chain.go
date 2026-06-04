@@ -10,9 +10,7 @@ import (
 
 	bcs "github.com/iotaledger/bcs-go"
 	"github.com/iotaledger/hive.go/log"
-	"github.com/iotaledger/wasp/clients/iota-go/iotaclient"
 	"github.com/iotaledger/wasp/clients/iota-go/iotago"
-	"github.com/iotaledger/wasp/clients/iota-go/iotajsonrpc"
 	"github.com/iotaledger/wasp/clients/iota-go/iotasigner"
 	"github.com/iotaledger/wasp/clients/iscmove"
 	"github.com/iotaledger/wasp/clients/iscmove/iscmoveclient"
@@ -48,8 +46,7 @@ func newNCChain(
 	chainID isc.ChainID,
 	requestHandler chain.RequestHandler,
 	anchorHandler chain.AnchorHandler,
-	wsURL string,
-	httpURL string,
+	grpcURL string,
 ) (*ncChain, error) {
 	anchorAddress := chainID.AsAddress().AsIotaAddress()
 
@@ -58,8 +55,8 @@ func newNCChain(
 		nodeConn.iscPackageID,
 		*anchorAddress,
 		nodeConn.Logger,
-		wsURL,
-		httpURL,
+		grpcURL,
+		nodeConn.l1Client,
 	)
 	if err != nil {
 		return nil, err
@@ -94,55 +91,21 @@ func (ncc *ncChain) postTxLoop(ctx context.Context) {
 			return nil, err
 		}
 
-		// Executing the transaction via DryRun before posting to make sure the transaction is valid, as failed transactions cost gas!
-		// Repeatedly failing transactions == sad gas coin
-		dryRes, err := ncc.nodeConn.httpClient.DryRunTransaction(task.ctx, txBytes)
-		if err != nil {
+		// Dry-run before posting to catch failures before they cost gas.
+		if err := ncc.nodeConn.l1Client.SimulateTransaction(task.ctx, txBytes); err != nil {
 			return nil, fmt.Errorf("failed to dry-run Anchor transaction: %w", err)
 		}
+		ncc.LogDebug("successfully dry-run Anchor transaction")
 
-		if dryRes == nil {
-			return nil, fmt.Errorf("failed to dry-run Anchor transaction: response == nil")
-		}
-
-		if dryRes.Effects.Data.IsFailed() {
-			return nil, fmt.Errorf("failed to dry-run Anchor transaction: response.Effects.Failed")
-		}
-
-		if dryRes.Effects.Data.IsSuccess() {
-			ncc.LogDebug("successfully dry-run Anchor transaction")
-		}
-
-		res, err := ncc.nodeConn.httpClient.ExecuteTransactionBlock(task.ctx, iotaclient.ExecuteTransactionBlockRequest{
-			TxDataBytes: txBytes,
-			Signatures:  task.tx.Signatures,
-			Options: &iotajsonrpc.IotaTransactionBlockResponseOptions{
-				ShowObjectChanges: true,
-				ShowEffects:       true,
-			},
-			RequestType: iotajsonrpc.TxnRequestTypeWaitForLocalExecution,
-		})
-
-		if err != nil {
+		if _, err := ncc.nodeConn.l1Client.ExecuteTransaction(task.ctx, txBytes, task.tx.Signatures); err != nil {
 			ncc.LogErrorf("POSTING TX error: %v\n", err)
-		} else {
-			ncc.LogDebugf("POSTING TX response: %v\n", res)
-		}
-
-		if err != nil {
 			return nil, err
 		}
+		ncc.LogDebug("POSTING TX success")
 
-		if !res.Effects.Data.IsSuccess() {
-			return nil, fmt.Errorf("error executing tx: %s Digest: %s", res.Effects.Data.V1.Status.Error, res.Digest)
-		}
-
-		anchorInfo, err := res.GetMutatedObjectInfo(iscmove.AnchorModuleName, iscmove.AnchorObjectName)
-		if err != nil {
-			return nil, err
-		}
-
-		anchor, err := ncc.nodeConn.httpClient.GetAnchorFromObjectID(ctx, anchorInfo.ObjectID)
+		// The anchor address equals the chain ID — no need to parse it from tx effects.
+		anchorAddress := ncc.chainID.AsObjectID()
+		anchor, err := ncc.nodeConn.l1Client.GetAnchorFromObjectID(ctx, &anchorAddress)
 		if err != nil {
 			return nil, err
 		}

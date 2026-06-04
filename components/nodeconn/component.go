@@ -54,8 +54,7 @@ func provide(c *dig.Container) error {
 			Component.Daemon().ContextStopped(),
 			*address,
 			chains.ParamsChains.MempoolMaxOnledgerInPool,
-			ParamsL1.WebsocketURL,
-			ParamsL1.HttpURL,
+			ParamsL1.GrpcURL,
 			Component.Logger.NewChildLogger("nc"),
 			deps.ShutdownHandler,
 		)

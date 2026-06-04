@@ -170,7 +170,7 @@ func initDeployCmd() *cobra.Command {
 
 			committeeAddr := doDKG(ctx, node, peers, quorum)
 
-			l1Params, err := parameters.FetchLatest(context.Background(), l1Client.IotaClient())
+			l1Params, err := parameters.FetchLatestHTTP(context.Background(), l1Client.IotaClient())
 			log.Check(err)
 
 			gasCoin, err := CreateAndSendGasCoin(ctx, l1Client, kp, committeeAddr.AsIotaAddress(), l1Params)

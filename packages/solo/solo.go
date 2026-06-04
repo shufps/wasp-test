@@ -8,11 +8,14 @@ import (
 	"context"
 	"math"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/samber/lo"
 	"github.com/stretchr/testify/require"
+
+	"fmt"
 
 	bcs "github.com/iotaledger/bcs-go"
 	"github.com/iotaledger/hive.go/kvstore"
@@ -22,6 +25,7 @@ import (
 	"github.com/iotaledger/wasp/clients/iota-go/iotaclient"
 	"github.com/iotaledger/wasp/clients/iota-go/iotaclient/iotaclienttest"
 	"github.com/iotaledger/wasp/clients/iota-go/iotago"
+	"github.com/iotaledger/wasp/clients/iota-go/iotagrpc"
 	"github.com/iotaledger/wasp/clients/iota-go/iotajsonrpc"
 	"github.com/iotaledger/wasp/clients/iscmove"
 	"github.com/iotaledger/wasp/clients/iscmove/iscmoveclient"
@@ -120,6 +124,7 @@ type InitOptions struct {
 type L1Config struct {
 	IotaRPCURL    string
 	IotaFaucetURL string
+	IotaGrpcURL   string
 	ISCPackageID  iotago.PackageID
 }
 
@@ -151,12 +156,22 @@ func New(t Context, initOptions ...*InitOptions) *Solo {
 		opt.L1Config = &L1Config{
 			IotaRPCURL:    l1starter.Instance().APIURL(),
 			IotaFaucetURL: l1starter.Instance().FaucetURL(),
+			IotaGrpcURL:   l1starter.Instance().GrpcURL(),
 			ISCPackageID:  l1starter.Instance().ISCPackageID(),
 		}
 	}
 
 	ctx, cancelCtx := context.WithCancel(context.Background())
 	t.Cleanup(cancelCtx)
+
+	if !strings.HasPrefix(opt.L1Config.IotaGrpcURL, "grpc://") && !strings.HasPrefix(opt.L1Config.IotaGrpcURL, "grpcs://") {
+		panic(fmt.Sprintf("solo: IotaGrpcURL must start with grpc:// or grpcs://, got: %q", opt.L1Config.IotaGrpcURL))
+	}
+	grpcClient, err := iotagrpc.NewClient(opt.L1Config.IotaGrpcURL)
+	if err != nil {
+		panic(fmt.Sprintf("solo: failed to create gRPC client: %v", err))
+	}
+	l1ParamsFetcher := parameters.NewL1ParamsFetcher(grpcClient, opt.Log)
 
 	ret := &Solo{
 		T:                    t,
@@ -167,7 +182,7 @@ func New(t Context, initOptions ...*InitOptions) *Solo {
 		enableGasBurnLogging: opt.GasBurnLogEnabled,
 		seed:                 cryptolib.NewSeed(),
 		publisher:            publisher.New(opt.Log.NewChildLogger("publisher")),
-		l1ParamsFetcher:      parameters.NewL1ParamsFetcher(l1starter.Instance().L1Client().IotaClient(), opt.Log),
+		l1ParamsFetcher:      l1ParamsFetcher,
 		ctx:                  ctx,
 	}
 	_ = ret.publisher.Events.Published.Hook(func(ev *publisher.ISCEvent[any]) {

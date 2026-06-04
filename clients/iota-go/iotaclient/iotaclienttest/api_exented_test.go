@@ -2,20 +2,16 @@ package iotaclienttest
 
 import (
 	"context"
-	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/iotaledger/wasp/clients/iota-go/iotaclient"
-	"github.com/iotaledger/wasp/clients/iota-go/iotaconn"
 	"github.com/iotaledger/wasp/clients/iota-go/iotago"
-	"github.com/iotaledger/wasp/clients/iota-go/iotago/serialization"
 	"github.com/iotaledger/wasp/clients/iota-go/iotajsonrpc"
 	"github.com/iotaledger/wasp/clients/iota-go/iotasigner"
 	testcommon "github.com/iotaledger/wasp/clients/iota-go/test_common"
 	"github.com/iotaledger/wasp/packages/testutil/l1starter"
-	"github.com/iotaledger/wasp/packages/testutil/testlogger"
 )
 
 func TestGetDynamicFieldObject(t *testing.T) {
@@ -237,129 +233,4 @@ func TestResolveNameServiceNames(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Empty(t, namePage.Data)
-}
-
-func TestSubscribeEvent(t *testing.T) {
-	t.Skip()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	log := testlogger.NewLogger(t)
-	api, err := iotaclient.NewWebsocket(
-		ctx,
-		iotaconn.AlphanetWebsocketEndpointURL,
-		l1starter.WaitUntilEffectsVisible,
-		log,
-	)
-	require.NoError(t, err)
-
-	type args struct {
-		ctx      context.Context
-		filter   *iotajsonrpc.EventFilter
-		resultCh chan *iotajsonrpc.IotaEvent
-	}
-	tests := []struct {
-		name    string
-		args    args
-		want    *iotajsonrpc.EventPage
-		wantErr bool
-	}{
-		{
-			name: "test for filter events",
-			args: args{
-				ctx: context.Background(),
-				filter: &iotajsonrpc.EventFilter{
-					Package: iotago.MustPackageIDFromHex("0x000000000000000000000000000000000000000000000000000000000000dee9"),
-				},
-				resultCh: make(chan *iotajsonrpc.IotaEvent),
-			},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(
-			tt.name, func(t *testing.T) {
-				err := api.SubscribeEvent(
-					tt.args.ctx,
-					tt.args.filter,
-					tt.args.resultCh,
-				)
-				if (err != nil) != tt.wantErr {
-					t.Errorf("SubscribeEvent() error: %v, wantErr %v", err, tt.wantErr)
-					return
-				}
-				cnt := 0
-				for results := range tt.args.resultCh {
-					fmt.Println("results: ", results)
-					cnt++
-					if cnt > 3 {
-						break
-					}
-				}
-			},
-		)
-	}
-}
-
-func TestSubscribeTransaction(t *testing.T) {
-	t.Skip()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	log := testlogger.NewLogger(t)
-	api, err := iotaclient.NewWebsocket(
-		ctx,
-		iotaconn.AlphanetWebsocketEndpointURL,
-		l1starter.WaitUntilEffectsVisible,
-		log,
-	)
-	require.NoError(t, err)
-
-	type args struct {
-		ctx      context.Context
-		filter   *iotajsonrpc.TransactionFilter
-		resultCh chan *serialization.TagJson[iotajsonrpc.IotaTransactionBlockEffects]
-	}
-	tests := []struct {
-		name    string
-		args    args
-		want    *iotajsonrpc.IotaTransactionBlockEffects
-		wantErr bool
-	}{
-		{
-			name: "test for filter transaction",
-			args: args{
-				ctx: context.Background(),
-				filter: &iotajsonrpc.TransactionFilter{
-					MoveFunction: &iotajsonrpc.TransactionFilterMoveFunction{
-						Package: *iotago.MustPackageIDFromHex("0x2c68443db9e8c813b194010c11040a3ce59f47e4eb97a2ec805371505dad7459"),
-					},
-				},
-				resultCh: make(chan *serialization.TagJson[iotajsonrpc.IotaTransactionBlockEffects]),
-			},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(
-			tt.name, func(t *testing.T) {
-				err := api.SubscribeTransaction(
-					tt.args.ctx,
-					tt.args.filter,
-					tt.args.resultCh,
-				)
-				if (err != nil) != tt.wantErr {
-					t.Errorf("SubscribeTransaction() error: %v, wantErr %v", err, tt.wantErr)
-					return
-				}
-				cnt := 0
-				for results := range tt.args.resultCh {
-					fmt.Println("results: ", results.Data.V1)
-					cnt++
-					if cnt > 3 {
-						break
-					}
-				}
-			},
-		)
-	}
 }

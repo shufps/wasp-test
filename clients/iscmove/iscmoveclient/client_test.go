@@ -18,7 +18,7 @@ import (
 )
 
 type PTBTestWrapperRequest struct {
-	Client      *iscmoveclient.Client
+	Client      *iscmoveclient.SoloClient
 	Signer      cryptolib.Signer
 	PackageID   iotago.PackageID
 	GasPayments []*iotago.ObjectRef // optional
